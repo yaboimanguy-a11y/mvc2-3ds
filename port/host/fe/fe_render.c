@@ -35,8 +35,27 @@ int fe_cnt[8]; /* tri_tex, tri, sprite, quad, fill, tri_tex rejected, sprite rej
 /* ---------------- texture / palette records -> GL ---------------- */
 #define NTEX 0x181
 #define NPAL 0x101
-typedef struct { u32 sig; int used; } Sync;
-static Sync tsync[NTEX], psync[NPAL];
+/* What a record last turned into: textures by a sampled signature (the full
+ * one at most once per game frame per texture, a 16-point one for the other
+ * draws of that frame: the 3DS profile had sync_tex at a fifth of the frame,
+ * hashing 257 scattered bytes for every draw); palettes by their raw bytes
+ * (exact, and cheaper than hashing them). */
+typedef struct { u32 sig, qsig; int used; long frame; const u8 *src; } Sync;
+static Sync tsync[NTEX];
+typedef struct { int used, n, cpsm; u32 len; u8 raw[1024]; } PalSync;
+static PalSync psync[NPAL];
+extern volatile long mvc2_host_frame;
+
+static u32 quick_sig(const u8 *p, u32 n, u32 seed)
+{
+    u32 h = 2166136261u ^ seed, i, step;
+    if (!p || !n)
+        return h;
+    step = n > 16 ? n / 16 : 1;
+    for (i = 0; i < n; i += step)
+        h = (h ^ p[i]) * 16777619u;
+    return (h ^ p[n - 1]) * 16777619u;
+}
 
 static u32 sample_sig(const u8 *p, u32 n, u32 seed)
 {
@@ -58,7 +77,7 @@ static void sync_pal(u32 pi)
 {
     u8 *e, *src, rgba[256 * 4];
     int n, cpsm, i;
-    u32 sig;
+    u32 len;
     if (pi == 0 || pi >= NPAL)
         return;
     e = (u8 *)EE_BSS_PTR(0x0061C7A0) + (pi - 1) * 64;
@@ -69,8 +88,11 @@ static void sync_pal(u32 pi)
         n = 16;
     cpsm = *(s32 *)(e + 0x1C);
     src = (u8 *)(uintptr_t)func_003DD030(*(s32 *)(e + 0x28));
-    sig = sample_sig(src, (u32)(cpsm == 2 ? n * 2 : n * 4), (u32)n << 8 | (u32)cpsm);
-    if (psync[pi].used && psync[pi].sig == sig)
+    if (!src)
+        return;
+    len = (u32)((cpsm == 2 || cpsm == 0xA) ? n * 2 : n * 4);
+    if (psync[pi].used && psync[pi].n == n && psync[pi].cpsm == cpsm && psync[pi].len == len &&
+        !memcmp(psync[pi].raw, src, len))
         return;
     for (i = 0; i < n; i++) {
         int s = n == 256 ? swap34(i) : i;
@@ -89,7 +111,10 @@ static void sync_pal(u32 pi)
         }
     }
     fl_pal_define(pi << 16, n, rgba);
-    psync[pi].sig = sig;
+    memcpy(psync[pi].raw, src, len);
+    psync[pi].len = len;
+    psync[pi].n = n;
+    psync[pi].cpsm = cpsm;
     psync[pi].used = 1;
 }
 
@@ -110,9 +135,20 @@ static void sync_tex(u32 ti)
     if (w <= 0 || h <= 0 || w > 1024 || h > 1024)
         return;
     src = (u8 *)(uintptr_t)func_003DD030(*(s32 *)(e + 0x28));
-    sig = sample_sig(src, size, (u32)psm << 24 ^ (u32)w << 12 ^ (u32)h);
-    if (tsync[ti].used && tsync[ti].sig == sig)
-        return;
+    {
+        u32 seed = (u32)psm << 24 ^ (u32)w << 12 ^ (u32)h;
+        u32 q = quick_sig(src, size, seed);
+        long fr = mvc2_host_frame;
+        Sync *t = &tsync[ti];
+        if (t->used && t->frame == fr && t->src == src && t->qsig == q)
+            return; /* checked in full this frame, and the 16 points agree */
+        sig = sample_sig(src, size, seed);
+        t->frame = fr;
+        t->src = src;
+        t->qsig = q;
+        if (t->used && t->sig == sig)
+            return;
+    }
     if (*(s32 *)(e + 0x20) != 0)
         HOST_ONCE("texture %u: swizzled pool data (func_003EB210) is not converted", ti);
     n = w * h;

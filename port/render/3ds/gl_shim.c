@@ -7,15 +7,33 @@
 uint32_t r3ds_frame_number(void);
 
 /* ---- buffers ----------------------------------------------------------
- * In linear memory: the GPU reads vertices and indices from them.  A buffer
- * drawn in the current frame is not changed in place (the GPU draws the
- * frame after it is built): a write gets a new copy and the old one is
- * freed once that frame is done (gls_frame_start). */
+ * In linear memory: the GPU mesh paths read vertices and indices from them.
+ * For those, a buffer drawn in a frame the GPU may still draw is not changed
+ * in place: a write gets a new copy and the old one is freed once those
+ * frames are done (gls_frame_start).  The CPU mesh path (the default,
+ * gls_set_cpu_only) reads them only while the draw is recorded, so writes
+ * go in place with no copy and no cache flush. */
 #define MAX_BUF 4096
 #define MAX_RETIRED 1024
 typedef struct Buf { uint8_t *data; size_t size; int used; uint32_t drawn_frame; } Buf;
 static struct { void *p; uint32_t frame; } retired[MAX_RETIRED];
 static int nretired;
+static int cpu_only;
+
+static void flush_all_buffers(void);
+void gls_set_cpu_only(int on)
+{
+    /* back to the GPU paths: what was written in place reaches the GPU */
+    if (cpu_only && !on) flush_all_buffers();
+    cpu_only = on != 0;
+}
+
+/* drawn in a frame the GPU may still draw (this one or, deferred, the last) */
+static int in_flight(uint32_t drawn)
+{
+    if (cpu_only || drawn == 0xFFFFFFFFu) return 0;
+    return drawn + 1 >= r3ds_frame_number();
+}
 
 static void lin_free(void *p, int drawn_now)
 {
@@ -35,12 +53,18 @@ void gls_frame_start(void)
     uint32_t now = r3ds_frame_number();
     int k = 0;
     for (int i = 0; i < nretired; i++) {
-        if (retired[i].frame < now) linearFree(retired[i].p);
+        if (retired[i].frame + 2 <= now) linearFree(retired[i].p);
         else retired[k++] = retired[i];
     }
     nretired = k;
 }
 static Buf bufs[MAX_BUF];
+
+static void flush_all_buffers(void)
+{
+    for (int i = 1; i < MAX_BUF; i++)
+        if (bufs[i].used && bufs[i].data) GSPGPU_FlushDataCache(bufs[i].data, bufs[i].size);
+}
 static GLuint bound_array, bound_element;
 
 void glGenBuffers(GLsizei n, GLuint *ids)
@@ -59,10 +83,12 @@ void glGenBuffers(GLsizei n, GLuint *ids)
 
 void glDeleteBuffers(GLsizei n, const GLuint *ids)
 {
+    /* (a mesh job may still read them: r3ds_mesh_sync_buf below) */
     for (GLsizei k = 0; k < n; k++) {
         GLuint i = ids[k];
         if (i == 0 || i >= MAX_BUF || !bufs[i].used) continue;
-        lin_free(bufs[i].data, bufs[i].drawn_frame == r3ds_frame_number());
+        r3ds_mesh_sync_buf(bufs[i].data, bufs[i].size);
+        lin_free(bufs[i].data, in_flight(bufs[i].drawn_frame));
         memset(&bufs[i], 0, sizeof bufs[i]);
         if (bound_array == i) bound_array = 0;
         if (bound_element == i) bound_element = 0;
@@ -91,8 +117,9 @@ void glBufferData(GLenum target, GLsizeiptr size, const void *data, GLenum usage
 {
     Buf *b = bound(target);
     (void)usage;
+    if (b) r3ds_mesh_sync_buf(b->data, b->size);
     if (!b || size < 0) return;
-    int drawn_now = b->drawn_frame == r3ds_frame_number();
+    int drawn_now = in_flight(b->drawn_frame);
     if ((size_t)size != b->size || drawn_now) {
         lin_free(b->data, drawn_now);
         b->data = size ? (uint8_t *)linearAlloc((size_t)size) : NULL;
@@ -101,15 +128,16 @@ void glBufferData(GLenum target, GLsizeiptr size, const void *data, GLenum usage
     }
     if (data && b->data) memcpy(b->data, data, b->size);
     else if (b->data) memset(b->data, 0, b->size);
-    if (b->data) GSPGPU_FlushDataCache(b->data, b->size);
+    if (b->data && !cpu_only) GSPGPU_FlushDataCache(b->data, b->size);
 }
 
 void glBufferSubData(GLenum target, GLintptr off, GLsizeiptr size, const void *data)
 {
     Buf *b = bound(target);
     if (!b || off < 0 || size < 0 || (size_t)(off + size) > b->size) return;
-    if (b->drawn_frame == r3ds_frame_number()) {
-        /* copy on write: this frame's draws keep the old contents */
+    r3ds_mesh_sync_buf(b->data, b->size);
+    if (in_flight(b->drawn_frame)) {
+        /* copy on write: the draws in flight keep the old contents */
         uint8_t *n = (uint8_t *)linearAlloc(b->size);
         if (!n) return;
         memcpy(n, b->data, b->size);
@@ -118,7 +146,7 @@ void glBufferSubData(GLenum target, GLintptr off, GLsizeiptr size, const void *d
         b->drawn_frame = 0xFFFFFFFFu;
     }
     memcpy(b->data + off, data, (size_t)size);
-    GSPGPU_FlushDataCache(b->data + off, (u32)size);
+    if (!cpu_only) GSPGPU_FlushDataCache(b->data + off, (u32)size);
 }
 
 /* ---- vertex arrays: the element buffer and the attributes are VAO state -- */
@@ -219,6 +247,13 @@ GLint glGetUniformLocation(GLuint p, const GLchar *name)
     memset(&unis[nunis], 0, sizeof unis[nunis]);
     strcpy(unis[nunis].name, name);
     return nunis++;
+}
+
+const GlsUniform *gls_uniform_slot(const char *name)
+{
+    for (int i = 0; i < nunis; i++)
+        if (!strcmp(unis[i].name, name)) return &unis[i];
+    return NULL;
 }
 
 const GlsUniform *gls_uniform(const char *name)

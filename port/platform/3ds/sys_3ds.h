@@ -17,7 +17,9 @@ void sys3ds_app_dir(int argc, char **argv, char *out, size_t n);
 int sys3ds_open_disc(int argc, char **argv, const char *dir);
 
 /* Everything printed (stdout and stderr) also goes to dir/mvc2_log.txt. */
-int sys3ds_log_open(const char *dir); /* 0 = logging */
+int sys3ds_log_open(const char *dir); /* tee + file; 0 = logging */
+void sys3ds_log_tee(void);            /* stdout / stderr to the console (and the file when open) */
+int sys3ds_log_file(const char *dir, int on); /* mvc2_log.txt on / off; 0 = done */
 void sys3ds_log_flush(void);
 void sys3ds_log_close(void);
 /* 0: stdout / stderr go to the log file only (the bottom screen shows the

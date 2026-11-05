@@ -18,16 +18,40 @@
  * - Present: the 640x480 canvas (a 1024x512 render-target texture) is
  *   scaled to the 400x240 top screen with the bilinear filter.  The CRT /
  *   sharp shaders of the GL renderer are not available.
+ * - Draw records: every draw becomes a DrawRec (state + a vertex range of
+ *   the frame's ring).  In the app (r3ds_set_deferred(1)) the records are
+ *   kept while the game's logic runs and replayed into citro3d after
+ *   C3D_FrameBegin (r3ds_frame_submit), so the logic of frame N runs while
+ *   the GPU still draws frame N-1.  Anything the GPU may still read is kept
+ *   for two frames (copy on write, deferred frees).  Without deferral (the
+ *   self-test) each record is replayed at once.  The replay emits only the
+ *   state that changed and sets the vertex buffer once per pass.
+ * - Stereoscopic 3D: the records are replayed once per eye; the 2D shader
+ *   shifts each vertex horizontally by a clamped linear function of its
+ *   depth (uniform `stereo`), set per eye from the depth range the frame's
+ *   stage geometry used (stereo_params).
  */
 #include "../r_internal.h"
 #include "../decode.h"
 #include "r_c3d.h"
+#include "r3ds_prof.h"
 #include <3ds.h>
 #include <citro3d.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+uint64_t r3ds_prof[RP_N];
+
+/* floorf without the libm call (VFPv2 has no rounding instruction; the
+ * conversion truncates whatever the FPSCR rounding mode) */
+static inline float ffloor(float x)
+{
+    if (!(x > -8388608.f && x < 8388608.f)) return x; /* integral already (or NaN) */
+    float t = (float)(int32_t)x;
+    return t > x ? t - 1.f : t;
+}
 
 extern const u8 r2d_shbin[];
 extern const u32 r2d_shbin_size;
@@ -40,10 +64,16 @@ extern const u32 mesh_nofog_shbin_size;
 #define MAX_PAL 4096
 #define MAX_VERTS 32768
 #define VRING_BYTES (4u << 20)          /* per frame, two of them (2D + expanded meshes) */
-#define EXP_PER_TEX 4
+#define EXP_PER_TEX 6                   /* palette rows per indexed texture (kept two frames: deferred replay) */
 #define EXP_BUDGET (20u << 20)          /* expanded indexed textures, bytes */
-#define MAX_DEAD 2048
+#define MAX_DEAD 4096
 #define MAX_EXT 64
+#define MAX_REC 8192                    /* draw records per frame */
+/* the canvas's drawing resolution, of 640x480: 0.75 (480x360) keeps the GPU
+ * under the frame time in fights (about 13 ms) and is still finer than the
+ * top screen's 320x240 / 400x240 picture */
+#define R3DS_SCALE 0.75f
+#define VWINDOW 32768                   /* vertices one buffer binding addresses */
 
 /* texture ids (the "GLuint" of r_internal.h) */
 #define ID_WHITE 0x10000u
@@ -71,19 +101,57 @@ typedef struct MeshLoc {
 } MeshLoc;
 
 enum { TGT_NONE = 0, TGT_CANVAS, TGT_TOP };
+enum { ST_FLAT = 0, ST_DEPTH = 1 };     /* stereo: screen plane / shifted by depth */
+
+/* one draw: everything the replay needs (r3ds_frame_submit / replay_rec) */
+typedef struct DrawRec {
+    C3D_Tex *tex;           /* NULL: untextured */
+    uint32_t first, count;  /* vertices: RVtx index into the frame's ring */
+    float su, sv;           /* uv scale (padded textures) */
+    int16_t view_w, view_h; /* pixels -> NDC of the 2D shader */
+    int16_t sc[4];          /* scissor x0 y0 x1 y1 (framebuffer); sc[0] < 0: off */
+    uint8_t target;         /* TGT_CANVAS / TGT_TOP */
+    uint8_t tilt;           /* the top screen's 90 degree turn */
+    uint8_t texp;           /* bit 0 linear filter, bit 1 clamp */
+    uint8_t tev;            /* bit 0 textured, bit 1 rgb x2, bit 2 alpha x2 */
+    uint8_t bl_eq, bl_src, bl_dst;
+    uint8_t d_on, d_func, d_mask;
+    uint8_t atest, aref;
+    uint8_t stereo;         /* ST_* */
+    uint8_t clear;          /* the frame's canvas clear (quad), clear_rgba its colour */
+    uint32_t clear_rgba;
+} DrawRec;
 
 static struct {
     shaderProgram_s prog, mprog[2];     /* mesh.v.pica, mesh_nofog.v.pica */
     DVLB_s *dvlb, *mdvlb[2];
     MeshLoc mloc[2];
     C3D_Tex fog_ramp;       /* 256x8, alpha = s: the fog factor as a TEV source */
-    int u_scale, u_rotx, u_roty, u_uvscale;
+    int u_scale, u_rotx, u_roty, u_uvscale, u_stereo;
     C3D_Tex canvas;
-    C3D_RenderTarget *canvas_rt, *top_rt;
+    C3D_RenderTarget *canvas_rt, *top_rt[2]; /* top: left / right eye */
     C3D_Tex white;
     uint8_t *vring[2];
     size_t vused;
     int vring_full_logged;
+    /* draw records (see the file comment) */
+    int deferred;
+    DrawRec *rec;
+    int nrec, rec_full_logged;
+    /* stereo: this frame's classification and depth range, and the
+     * parameters from the frames before (stereo_params) */
+    int chars_now, chars_prev;          /* character sprites drawn (this / last frame) */
+    int st_track;                       /* gather the depth range (3D was on last frame) */
+    float zlo, zhi;                     /* this frame: depth range of ST_DEPTH vertices */
+    float st_far, st_near;              /* smoothed range */
+    int st_have;
+    float st_uni[2][4];                 /* per eye: (a, b, lo, hi) of the `stereo` uniform */
+    int eyes_last;
+    /* the canvas is drawn at `scale` of 640x480 (R3DS_SCALE), and palette
+     * expansions are 16-bit where the palette allows (exp_fmt) */
+    float scale;
+    uint32_t rec_clear;                 /* the clear record's colour, 0xRRGGBBAA */
+    int rec_is_clear;
     TexRec tex[MAX_TEX];
     PalRec pal[MAX_PAL];
     uint32_t pal_rgba[R_PAL_ROWS][256];  /* PICA RGBA8 words (R<<24|G<<16|B<<8|A) */
@@ -166,7 +234,11 @@ static C3D_Tex *tex_new(int pw, int ph, GPU_TEXCOLOR fmt)
     return t;
 }
 
-/* retire: freed when the GPU is done with the frame that may still use it */
+/* Frames the GPU may still read: the one being built and, with deferred
+ * replay, the one before (drawn while this frame's logic runs). */
+static inline int in_flight(uint32_t frame) { return frame != 0 && frame + 1 >= R.frame; }
+
+/* retire: freed when the GPU is done with every frame that may still use it */
 static void tex_retire(C3D_Tex *t)
 {
     if (!t) return;
@@ -182,7 +254,9 @@ static void free_dead(void)
 {
     int k = 0;
     for (int i = 0; i < R.ndead; i++) {
-        if (R.dead[i].frame < R.frame) {
+        /* retired in frame f: frames f-1 (in flight then) and f may draw it;
+         * both are done once frame f+2 starts */
+        if (R.dead[i].frame + 2 <= R.frame) {
             C3D_TexDelete(R.dead[i].t);
             free(R.dead[i].t);
         } else {
@@ -202,29 +276,26 @@ void r3ds_tex_put_rgba8(C3D_Tex *t, int x0, int y0, int w, int h, const uint8_t 
     }
 }
 
-/* indexed pixels through a palette of PICA RGBA8 words */
-static void put_indexed(C3D_Tex *t, int x0, int y0, int w, int h, const uint8_t *idx, int stride, const uint32_t *pal)
+/* indexed pixels (w x h, from the top-left of the texture) through a palette
+ * of PICA RGBA8 words, one 8x8 tile at a time: each tile is 64 consecutive
+ * words, the texel order inside it the fixed morton table */
+static void put_indexed(C3D_Tex *t, int w, int h, const uint8_t *idx, int stride, const uint32_t *pal)
 {
     uint32_t *d = (uint32_t *)t->data;
-    for (int y = 0; y < h; y++) {
-        const uint8_t *s = idx + (size_t)y * stride;
-        uint32_t my = img_row(y0 + y, t->height);
-        for (int x = 0; x < w; x++) d[tile_index((uint32_t)(x0 + x), my, t->width)] = pal[s[x]];
+    const int pw = t->width, ph = t->height;
+    for (int ty = 0; ty < h; ty += 8) {
+        int rows = h - ty < 8 ? h - ty : 8;
+        for (int tx = 0; tx < w; tx += 8) {
+            int cols = w - tx < 8 ? w - tx : 8;
+            for (int r = 0; r < rows; r++) {
+                uint32_t my = img_row(ty + r, ph);
+                uint32_t *tile = d + ((((my >> 3) * (uint32_t)(pw >> 3)) + ((uint32_t)tx >> 3)) << 6);
+                const uint8_t *mrow = morton + ((my & 7) << 3);
+                const uint8_t *s = idx + (size_t)(ty + r) * stride + tx;
+                for (int c = 0; c < cols; c++) tile[mrow[c]] = pal[s[c]];
+            }
+        }
     }
-}
-
-/* ---------------- shader / pipeline ---------------- */
-static void bind_2d_pipeline(void)
-{
-    C3D_BindProgram(&R.prog);
-    C3D_AttrInfo *ai = C3D_GetAttrInfo();
-    AttrInfo_Init(ai);
-    AttrInfo_AddLoader(ai, 0, GPU_FLOAT, 4);          /* x y z w */
-    AttrInfo_AddLoader(ai, 1, GPU_FLOAT, 2);          /* u v */
-    AttrInfo_AddLoader(ai, 2, GPU_UNSIGNED_BYTE, 4);  /* rgba */
-    AttrInfo_AddLoader(ai, 3, GPU_FLOAT, 1);          /* pal (unused by the shader) */
-    C3D_DepthMap(true, -1.0f, 0.0f);
-    C3D_CullFace(GPU_CULL_NONE);
 }
 
 /* ---------------- init ---------------- */
@@ -232,8 +303,10 @@ int r_init(void)
 {
     memset(&R, 0, sizeof R);
     init_morton();
+    gls_set_cpu_only(1); /* the default mesh path (R3DS_MESH_CPU) */
     R.sprite_filter = -1;
     R.present_mode = R3DS_PRESENT_43;
+    R.scale = R3DS_SCALE;
 
     R.dvlb = DVLB_ParseFile((u32 *)r2d_shbin, r2d_shbin_size);
     if (!R.dvlb) return -1;
@@ -243,6 +316,9 @@ int r_init(void)
     R.u_rotx = shaderInstanceGetUniformLocation(R.prog.vertexShader, "rotx");
     R.u_roty = shaderInstanceGetUniformLocation(R.prog.vertexShader, "roty");
     R.u_uvscale = shaderInstanceGetUniformLocation(R.prog.vertexShader, "uvscale");
+    R.u_stereo = shaderInstanceGetUniformLocation(R.prog.vertexShader, "stereo");
+    R.rec = (DrawRec *)malloc(sizeof(DrawRec) * MAX_REC);
+    if (!R.rec) return -1;
 
     for (int k = 0; k < 2; k++) {
         R.mdvlb[k] = k == 0 ? DVLB_ParseFile((u32 *)mesh_shbin, mesh_shbin_size)
@@ -265,12 +341,18 @@ int r_init(void)
     C3D_DEPTHTYPE depth24 = { .__i = GPU_RB_DEPTH24_STENCIL8 };
     R.canvas_rt = C3D_RenderTargetCreateFromTex(&R.canvas, GPU_TEXFACE_2D, 0, depth24);
     if (!R.canvas_rt) return -1;
-    R.top_rt = C3D_RenderTargetCreate(240, 400, GPU_RB_RGBA8, depth24);
-    if (!R.top_rt) return -1;
-    C3D_RenderTargetSetOutput(R.top_rt, GFX_TOP, GFX_LEFT,
-        GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) |
-        GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8) |
-        GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
+    /* the top screen, one target per eye (the right one only drawn with the
+     * 3D slider up); only the present and overlay draws go there, all
+     * without the depth test, so they have no depth buffer (VRAM) */
+    C3D_DEPTHTYPE nodepth = { .__i = -1 };
+    for (int e = 0; e < 2; e++) {
+        R.top_rt[e] = C3D_RenderTargetCreate(240, 400, GPU_RB_RGBA8, nodepth);
+        if (!R.top_rt[e]) return -1;
+        C3D_RenderTargetSetOutput(R.top_rt[e], GFX_TOP, e ? GFX_RIGHT : GFX_LEFT,
+            GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) |
+            GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8) | GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8) |
+            GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
+    }
 
     if (!C3D_TexInit(&R.fog_ramp, 256, 8, GPU_RGBA8)) return -1;
     {
@@ -306,8 +388,10 @@ int r_init(void)
     return 0;
 }
 
+static void mesh_worker_stop(void);
 void r_shutdown(void)
 {
+    mesh_worker_stop();
     r_mesh_shutdown();
     for (int i = 0; i < MAX_TEX; i++)
         if (R.tex[i].used) fl_tex_release((uint32_t)(i + 1));
@@ -316,6 +400,16 @@ void r_shutdown(void)
 }
 
 /* ---------------- frame (the 3DS app) ---------------- */
+static void g_invalidate(void);
+
+static int mesh_worker_start(void);
+static void mesh_sync_z(void);
+void r3ds_set_deferred(int on)
+{
+    R.deferred = on != 0;
+    if (R.deferred) mesh_worker_start();
+}
+
 void r3ds_frame_start(void)
 {
     R.in_frame = 1;
@@ -323,9 +417,15 @@ void r3ds_frame_start(void)
     free_dead();
     gls_frame_start();
     R.vused = 0;
+    R.nrec = 0;
     R.target = TGT_NONE;
     R.canvas_bound = 0;
-    C3D_RenderTargetClear(R.top_rt, C3D_CLEAR_ALL, 0x000000FF, 0);
+    R.chars_now = 0;
+    R.zlo = 1.f;
+    R.zhi = -1.f;
+    g_invalidate();
+    if (!R.deferred) /* immediate: inside C3D_FrameBegin already */
+        C3D_RenderTargetClear(R.top_rt[0], C3D_CLEAR_COLOR, 0x000000FF, 0);
 }
 
 void r3ds_frame_finish(void)
@@ -356,35 +456,38 @@ static void set_view(int w, int h, int tilt)
     R.tilt = tilt;
 }
 
+/* the target the next draws go to (bound by the replay) */
 static void target_canvas(void)
 {
-    if (R.target != TGT_CANVAS) {
-        C3D_FrameDrawOn(R.canvas_rt);
-        C3D_SetViewport(0, 0, FL_SCREEN_W, FL_SCREEN_H);
-        R.target = TGT_CANVAS;
-    }
+    R.target = TGT_CANVAS;
     set_view(FL_SCREEN_W, FL_SCREEN_H, 0);
 }
 
 static void target_top(void)
 {
-    if (R.target != TGT_TOP && R.in_frame) {
-        C3D_FrameDrawOn(R.top_rt);
-        R.target = TGT_TOP;
-    }
+    R.target = TGT_TOP;
     set_view(400, 240, 1);
 }
 
-/* the scissor in canvas pixels (y down) -> framebuffer (y up) */
-static void apply_scissor(const int s[4])
+/* the scissor in canvas pixels (y down) -> framebuffer (y up); off: sc[0] = -1 */
+static void scissor_rect(const int s[4], int16_t sc[4])
 {
     if (R.target != TGT_CANVAS || !s) {
-        C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+        sc[0] = sc[1] = sc[2] = sc[3] = -1;
         return;
     }
-    int x0 = s[0], x1 = s[0] + s[2];
-    int y0 = FL_SCREEN_H - (s[1] + s[3]), y1 = FL_SCREEN_H - s[1];
-    C3D_SetScissor(GPU_SCISSOR_NORMAL, (u32)x0, (u32)y0, (u32)x1, (u32)y1);
+    sc[0] = (int16_t)s[0];
+    sc[1] = (int16_t)(FL_SCREEN_H - (s[1] + s[3]));
+    sc[2] = (int16_t)(s[0] + s[2]);
+    sc[3] = (int16_t)(FL_SCREEN_H - s[1]);
+}
+
+static void apply_scissor(const int s[4])
+{
+    int16_t sc[4];
+    scissor_rect(s, sc);
+    if (sc[0] < 0) C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+    else C3D_SetScissor(GPU_SCISSOR_NORMAL, (u32)sc[0], (u32)sc[1], (u32)sc[2], (u32)sc[3]);
 }
 
 /* ---------------- emitting draws ---------------- */
@@ -401,55 +504,8 @@ typedef struct DrawMode {
     int alpha_ref;         /* alpha test: alpha > ref */
 } DrawMode;
 
-static void emit_state(const DrawMode *m, const void *dst, int n);
 static void apply_state(const DrawMode *m, int alpha_ref);
-
-static void emit(const RVtx *v, int n, const DrawMode *m)
-{
-    size_t bytes = sizeof(RVtx) * (size_t)n;
-    if (n <= 0 || !R.in_frame) return; /* e.g. the game draws during boot: no GPU frame is open */
-    if (R.vused + bytes > VRING_BYTES) {
-        if (!R.vring_full_logged) {
-            fprintf(stderr, "[r3ds] vertex ring full (%u KB per frame): draws dropped\n", VRING_BYTES >> 10);
-            R.vring_full_logged = 1;
-        }
-        return;
-    }
-    uint8_t *dst = R.vring[R.frame & 1] + R.vused;
-    memcpy(dst, v, bytes);
-    R.vused += (bytes + 15) & ~(size_t)15;
-    emit_state(m, dst, n);
-}
-
-/* blend / depth / alpha test / scissor of a draw (2D and meshes) */
-static void apply_state(const DrawMode *m, int alpha_ref)
-{
-    if (m->blend == 1 && R.blend_ok)
-        C3D_AlphaBlend(R.bl_eq, R.bl_eq, R.bl_src, R.bl_dst, R.bl_src, R.bl_dst);
-    else if (m->blend == 2)
-        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
-    else
-        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
-
-    if (m->depth == 1) {
-        GPU_TESTFUNC f;
-        switch (R.ztest) {
-        case 0: f = GPU_NEVER; break;
-        case 3: f = GPU_GREATER; break;
-        case 7: f = GPU_ALWAYS; break;
-        default: f = GPU_GEQUAL; break;
-        }
-        C3D_DepthTest(true, f, R.zwrite ? GPU_WRITE_ALL : GPU_WRITE_COLOR);
-    } else if (m->depth == 2) {
-        C3D_DepthTest(true, GPU_ALWAYS, GPU_WRITE_ALL);
-    } else if (m->depth == 3) {
-        C3D_DepthTest(true, GPU_ALWAYS, GPU_WRITE_DEPTH);
-    } else {
-        C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
-    }
-    C3D_AlphaTest(m->alpha_test ? true : false, GPU_GREATER, alpha_ref);
-    apply_scissor(m->scissor ? R.scissor : NULL);
-}
+static void record(const DrawMode *m, uint32_t first, int n, int stereo);
 
 /* per-frame vertex ring: n bytes (16-aligned) the GPU reads this frame */
 static void *ring_alloc(size_t bytes)
@@ -460,48 +516,359 @@ static void *ring_alloc(size_t bytes)
     return p;
 }
 
-static void emit_state(const DrawMode *m, const void *dst, int n)
+/* n vertices at an RVtx boundary of the ring (records address the ring by
+ * vertex index): their index, or -1 when the ring is full */
+static int32_t ring_alloc_vtx(int n, RVtx **out)
 {
-    bind_2d_pipeline();
-    C3D_BufInfo *bi = C3D_GetBufInfo();
-    BufInfo_Init(bi);
-    BufInfo_Add(bi, dst, sizeof(RVtx), 4, 0x3210);
-
-    C3D_FVUnifSet(GPU_VERTEX_SHADER, R.u_scale, 2.f / (float)R.view_w, -2.f / (float)R.view_h, -1.f, 1.f);
-    if (R.tilt) {
-        /* Mtx_OrthoTilt: clip x = ndc y, clip y = -ndc x */
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, R.u_rotx, 0.f, 1.f, 0.f, 0.f);
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, R.u_roty, -1.f, 0.f, 0.f, 0.f);
-    } else {
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, R.u_rotx, 1.f, 0.f, 0.f, 0.f);
-        C3D_FVUnifSet(GPU_VERTEX_SHADER, R.u_roty, 0.f, 1.f, 0.f, 0.f);
+    size_t at = (R.vused + sizeof(RVtx) - 1) / sizeof(RVtx) * sizeof(RVtx);
+    size_t bytes = sizeof(RVtx) * (size_t)n;
+    if (at + bytes > VRING_BYTES) {
+        if (!R.vring_full_logged) {
+            fprintf(stderr, "[r3ds] vertex ring full (%u KB per frame): draws dropped\n", VRING_BYTES >> 10);
+            R.vring_full_logged = 1;
+        }
+        return -1;
     }
-    C3D_FVUnifSet(GPU_VERTEX_SHADER, R.u_uvscale, m->su, m->sv, 0.f, 0.f);
+    *out = (RVtx *)(R.vring[R.frame & 1] + at);
+    R.vused = at + bytes;
+    return (int32_t)(at / sizeof(RVtx));
+}
 
-    C3D_TexEnv *env = C3D_GetTexEnv(0);
-    C3D_TexEnvInit(env);
-    if (m->tex) {
-        GPU_TEXTURE_FILTER_PARAM f = m->linear ? GPU_LINEAR : GPU_NEAREST;
-        GPU_TEXTURE_WRAP_PARAM w = m->clamp ? GPU_CLAMP_TO_EDGE : GPU_REPEAT;
-        C3D_TexSetFilter(m->tex, f, f);
-        C3D_TexSetWrap(m->tex, w, w);
-        C3D_TexBind(0, m->tex);
-        C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
-        C3D_TexEnvFunc(env, C3D_Both, GPU_MODULATE);
-    } else {
-        C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
-        C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+static void emit(const RVtx *v, int n, const DrawMode *m, int stereo)
+{
+    if (n <= 0 || !R.in_frame) return; /* e.g. the game draws during boot: no GPU frame is open */
+    RVtx *dst;
+    int32_t first = ring_alloc_vtx(n, &dst);
+    if (first < 0) return;
+    memcpy(dst, v, sizeof(RVtx) * (size_t)n);
+    record(m, (uint32_t)first, n, stereo);
+}
+
+static GPU_TESTFUNC zfunc(void)
+{
+    switch (R.ztest) {
+    case 0: return GPU_NEVER;
+    case 3: return GPU_GREATER;
+    case 7: return GPU_ALWAYS;
+    default: return GPU_GEQUAL;
     }
-    if (m->scale_rgb2) C3D_TexEnvScale(env, C3D_RGB, GPU_TEVSCALE_2);
-    if (m->scale_a2) C3D_TexEnvScale(env, C3D_Alpha, GPU_TEVSCALE_2);
+}
+
+/* blend / depth / alpha test / scissor of a draw (the GPU mesh path; the
+ * records carry the same state, see record) */
+static void apply_state(const DrawMode *m, int alpha_ref)
+{
+    if (m->blend == 1 && R.blend_ok)
+        C3D_AlphaBlend(R.bl_eq, R.bl_eq, R.bl_src, R.bl_dst, R.bl_src, R.bl_dst);
+    else if (m->blend == 2)
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
+    else
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
+
+    if (m->depth == 1)
+        C3D_DepthTest(true, zfunc(), R.zwrite ? GPU_WRITE_ALL : GPU_WRITE_COLOR);
+    else if (m->depth == 2)
+        C3D_DepthTest(true, GPU_ALWAYS, GPU_WRITE_ALL);
+    else if (m->depth == 3)
+        C3D_DepthTest(true, GPU_ALWAYS, GPU_WRITE_DEPTH);
+    else
+        C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+    C3D_AlphaTest(m->alpha_test ? true : false, GPU_GREATER, alpha_ref);
+    apply_scissor(m->scissor ? R.scissor : NULL);
+}
+
+/* ---------------- replay: draw records -> citro3d ----------------
+ * G is what the GPU has now; a record emits only what differs.  Invalidated
+ * at every pass (eye) and whenever other code drives citro3d (the GPU mesh
+ * path, citro2d on the bottom screen between frames). */
+static struct {
+    int valid, eye;
+    C3D_RenderTarget *rt;
+    int view_w, view_h, tilt;
+    int vbound;
+    uint32_t vbase;         /* first vertex of the bound buffer window */
+    C3D_Tex *tex;
+    int texp, tev, bl_eq, bl_src, bl_dst, d_on, d_func, d_mask, atest, aref, stereo;
+    int16_t sc[4];
+    float su, sv;
+} G;
+
+static void g_invalidate(void) { G.valid = 0; }
+
+static void g_begin(void)
+{
+    C3D_BindProgram(&R.prog);
+    C3D_AttrInfo *ai = C3D_GetAttrInfo();
+    AttrInfo_Init(ai);
+    AttrInfo_AddLoader(ai, 0, GPU_FLOAT, 4);          /* x y z w */
+    AttrInfo_AddLoader(ai, 1, GPU_FLOAT, 2);          /* u v */
+    AttrInfo_AddLoader(ai, 2, GPU_UNSIGNED_BYTE, 4);  /* rgba */
+    AttrInfo_AddLoader(ai, 3, GPU_FLOAT, 1);          /* pal (unused by the shader) */
+    C3D_DepthMap(true, -1.0f, 0.0f);
+    C3D_CullFace(GPU_CULL_NONE);
     for (int i = 1; i < 6; i++) C3D_TexEnvInit(C3D_GetTexEnv(i));
-    if (R.unit1_bound) { C3D_TexBind(1, &R.white) /* not NULL: citro3d dereferences it */; R.unit1_bound = 0; } /* the 2D shader feeds unit 0 only */
+    if (R.unit1_bound) { C3D_TexBind(1, &R.white) /* not NULL: citro3d dereferences it */; R.unit1_bound = 0; }
+    G.rt = NULL;
+    G.view_w = G.view_h = G.tilt = -1;
+    G.vbound = 0;
+    G.tex = (C3D_Tex *)&G;  /* matches nothing: the first draw binds (or unbinds) unit 0 */
+    G.texp = G.tev = G.bl_eq = G.bl_src = G.bl_dst = G.d_on = G.d_func = G.d_mask = -1;
+    G.atest = G.aref = G.stereo = -1;
+    G.sc[0] = G.sc[1] = G.sc[2] = G.sc[3] = -2;
+    G.su = G.sv = -1.f;
+    G.valid = 1;
+}
 
-    apply_state(m, m->alpha_ref);
+/* the citro3d target of a record's target for the current eye */
+static void g_target(int target)
+{
+    C3D_RenderTarget *rt = target == TGT_TOP ? R.top_rt[G.eye] : R.canvas_rt;
+    if (rt == G.rt) return;
+    C3D_FrameDrawOn(rt);
+    if (target != TGT_TOP)
+        C3D_SetViewport(0, 0, (u32)(FL_SCREEN_W * R.scale + .5f), (u32)(FL_SCREEN_H * R.scale + .5f));
+    G.rt = rt;
+}
 
-    C3D_DrawArrays(GPU_TRIANGLES, 0, n);
+static void replay_rec(const DrawRec *d)
+{
+    static const float zero4[4] = { 0.f, 0.f, 0.f, 0.f };
+    if (!G.valid) g_begin();
+    g_target(d->target);
+    if (d->view_w != G.view_w || d->view_h != G.view_h || d->tilt != G.tilt) {
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, R.u_scale, 2.f / (float)d->view_w, -2.f / (float)d->view_h, -1.f, 1.f);
+        if (d->tilt) {
+            /* Mtx_OrthoTilt: clip x = ndc y, clip y = -ndc x */
+            C3D_FVUnifSet(GPU_VERTEX_SHADER, R.u_rotx, 0.f, 1.f, 0.f, 0.f);
+            C3D_FVUnifSet(GPU_VERTEX_SHADER, R.u_roty, -1.f, 0.f, 0.f, 0.f);
+        } else {
+            C3D_FVUnifSet(GPU_VERTEX_SHADER, R.u_rotx, 1.f, 0.f, 0.f, 0.f);
+            C3D_FVUnifSet(GPU_VERTEX_SHADER, R.u_roty, 0.f, 1.f, 0.f, 0.f);
+        }
+        G.view_w = d->view_w;
+        G.view_h = d->view_h;
+        G.tilt = d->tilt;
+    }
+    /* the vertex buffer: the frame's ring from a window start, draws by offset */
+    if (!G.vbound || d->first < G.vbase || d->first + d->count > G.vbase + VWINDOW) {
+        C3D_BufInfo *bi = C3D_GetBufInfo();
+        BufInfo_Init(bi);
+        BufInfo_Add(bi, R.vring[R.frame & 1] + (size_t)d->first * sizeof(RVtx), sizeof(RVtx), 4, 0x3210);
+        G.vbase = d->first;
+        G.vbound = 1;
+    }
+    if (d->tev & 1) {
+        if (d->tex != G.tex || d->texp != G.texp) {
+            GPU_TEXTURE_FILTER_PARAM f = (d->texp & 1) ? GPU_LINEAR : GPU_NEAREST;
+            GPU_TEXTURE_WRAP_PARAM w = (d->texp & 2) ? GPU_CLAMP_TO_EDGE : GPU_REPEAT;
+            C3D_TexSetFilter(d->tex, f, f);
+            C3D_TexSetWrap(d->tex, w, w);
+            C3D_TexBind(0, d->tex);
+            G.tex = d->tex;
+            G.texp = d->texp;
+        }
+    } else if (G.tex) {
+        C3D_TexBind(0, NULL); /* unit 0 off: untextured draws fetch no texels */
+        G.tex = NULL;
+        G.texp = -1;
+    }
+    if (d->tev != G.tev) {
+        C3D_TexEnv *env = C3D_GetTexEnv(0);
+        C3D_TexEnvInit(env);
+        if (d->tev & 1) {
+            C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
+            C3D_TexEnvFunc(env, C3D_Both, GPU_MODULATE);
+        } else {
+            C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
+            C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+        }
+        if (d->tev & 2) C3D_TexEnvScale(env, C3D_RGB, GPU_TEVSCALE_2);
+        if (d->tev & 4) C3D_TexEnvScale(env, C3D_Alpha, GPU_TEVSCALE_2);
+        G.tev = d->tev;
+    }
+    if (d->su != G.su || d->sv != G.sv) {
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, R.u_uvscale, d->su, d->sv, 0.f, 0.f);
+        G.su = d->su;
+        G.sv = d->sv;
+    }
+    if (d->bl_eq != G.bl_eq || d->bl_src != G.bl_src || d->bl_dst != G.bl_dst) {
+        GPU_BLENDEQUATION eq = (GPU_BLENDEQUATION)d->bl_eq;
+        GPU_BLENDFACTOR s = (GPU_BLENDFACTOR)d->bl_src, t = (GPU_BLENDFACTOR)d->bl_dst;
+        C3D_AlphaBlend(eq, eq, s, t, s, t);
+        G.bl_eq = d->bl_eq;
+        G.bl_src = d->bl_src;
+        G.bl_dst = d->bl_dst;
+    }
+    if (d->d_on != G.d_on || d->d_func != G.d_func || d->d_mask != G.d_mask) {
+        C3D_DepthTest(d->d_on != 0, (GPU_TESTFUNC)d->d_func, (GPU_WRITEMASK)d->d_mask);
+        G.d_on = d->d_on;
+        G.d_func = d->d_func;
+        G.d_mask = d->d_mask;
+    }
+    if (d->atest != G.atest || d->aref != G.aref) {
+        C3D_AlphaTest(d->atest != 0, GPU_GREATER, d->aref);
+        G.atest = d->atest;
+        G.aref = d->aref;
+    }
+    if (memcmp(d->sc, G.sc, sizeof d->sc)) {
+        if (d->sc[0] < 0) C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+        else C3D_SetScissor(GPU_SCISSOR_NORMAL, (u32)d->sc[0], (u32)d->sc[1], (u32)d->sc[2], (u32)d->sc[3]);
+        memcpy(G.sc, d->sc, sizeof G.sc);
+    }
+    if (d->stereo != G.stereo) {
+        const float *u = d->stereo == ST_DEPTH ? R.st_uni[G.eye] : zero4;
+        C3D_FVUnifSet(GPU_VERTEX_SHADER, R.u_stereo, u[0], u[1], u[2], u[3]);
+        G.stereo = d->stereo;
+    }
+    C3D_DrawArrays(GPU_TRIANGLES, (int)(d->first - G.vbase), (int)d->count);
+}
+
+/* a draw of n ring vertices from `first` with mode m: a record (deferred:
+ * kept for r3ds_frame_submit; immediate: replayed now) */
+static void record(const DrawMode *m, uint32_t first, int n, int stereo)
+{
+    DrawRec d;
+    d.tex = m->tex;
+    d.first = first;
+    d.count = (uint32_t)n;
+    d.su = m->su;
+    d.sv = m->sv;
+    d.view_w = (int16_t)R.view_w;
+    d.view_h = (int16_t)R.view_h;
+    d.tilt = (uint8_t)(R.tilt != 0);
+    d.target = (uint8_t)(R.target == TGT_TOP ? TGT_TOP : TGT_CANVAS);
+    d.texp = (uint8_t)((m->linear ? 1 : 0) | (m->clamp ? 2 : 0));
+    d.tev = (uint8_t)((m->tex ? 1 : 0) | (m->scale_rgb2 ? 2 : 0) | (m->scale_a2 ? 4 : 0));
+    if (m->blend == 1 && R.blend_ok) {
+        d.bl_eq = (uint8_t)R.bl_eq; d.bl_src = (uint8_t)R.bl_src; d.bl_dst = (uint8_t)R.bl_dst;
+    } else if (m->blend == 2) {
+        d.bl_eq = GPU_BLEND_ADD; d.bl_src = GPU_SRC_ALPHA; d.bl_dst = GPU_ONE_MINUS_SRC_ALPHA;
+    } else {
+        d.bl_eq = GPU_BLEND_ADD; d.bl_src = GPU_ONE; d.bl_dst = GPU_ZERO;
+    }
+    if (m->depth == 1) {
+        d.d_on = 1; d.d_func = (uint8_t)zfunc(); d.d_mask = (uint8_t)(R.zwrite ? GPU_WRITE_ALL : GPU_WRITE_COLOR);
+    } else if (m->depth == 2) {
+        d.d_on = 1; d.d_func = GPU_ALWAYS; d.d_mask = GPU_WRITE_ALL;
+    } else if (m->depth == 3) {
+        d.d_on = 1; d.d_func = GPU_ALWAYS; d.d_mask = GPU_WRITE_DEPTH;
+    } else {
+        d.d_on = 0; d.d_func = GPU_ALWAYS; d.d_mask = GPU_WRITE_COLOR;
+    }
+    if (d.target == TGT_TOP) d.d_on = 0; /* the top targets have no depth buffer */
+    d.atest = (uint8_t)(m->alpha_test ? 1 : 0);
+    d.aref = (uint8_t)m->alpha_ref;
+    scissor_rect(m->scissor ? R.scissor : NULL, d.sc);
+    if (d.sc[0] >= 0 && R.scale != 1.f)
+        for (int i = 0; i < 4; i++) d.sc[i] = (int16_t)(d.sc[i] * R.scale + .5f);
+    d.stereo = (uint8_t)stereo;
+    d.clear = (uint8_t)R.rec_is_clear;
+    d.clear_rgba = R.rec_clear;
     R.draws++;
     R.frame_verts += n;
+    if (!R.deferred) {
+        replay_rec(&d);
+        return;
+    }
+    if (R.nrec == MAX_REC) {
+        if (!R.rec_full_logged) {
+            fprintf(stderr, "[r3ds] %d draw records in a frame: later draws dropped\n", MAX_REC);
+            R.rec_full_logged = 1;
+        }
+        return;
+    }
+    R.rec[R.nrec++] = d;
+}
+
+/* ---------------- stereoscopic 3D ----------------
+ * Per eye, the 2D shader adds clamp(a + b z, lo, hi) to a vertex's NDC x
+ * (z: its NDC depth, -1 far .. 1 near).  ST_DEPTH draws (the stage: meshes,
+ * and 2D drawn before the fighters) get the depth-dependent shift, the rest
+ * (fighters, effects, HUD, clears, the present) stay on the screen plane.
+ * The depth range is the stage meshes' over the last frames (smoothed): its
+ * far end goes `far` screen pixels into the screen and the screen plane sits
+ * 15% of the range behind its near end, so the nearest part of the stage
+ * comes out a little (at most `pop` pixels). */
+static void stereo_params(float slider)
+{
+    memset(R.st_uni, 0, sizeof R.st_uni);
+    if (slider <= 0.f) {
+        R.st_have = 0;
+        return;
+    }
+    if (R.zhi - R.zlo >= 0.002f) {
+        if (!R.st_have) {
+            R.st_far = R.zlo;
+            R.st_near = R.zhi;
+            R.st_have = 1;
+        } else {
+            R.st_far += 0.15f * (R.zlo - R.st_far);
+            R.st_near += 0.15f * (R.zhi - R.st_near);
+        }
+    }
+    if (!R.st_have) return;
+    float range = R.st_near - R.st_far;
+    if (range < 0.002f) return;
+    float zc = R.st_near - 0.15f * range;
+    int x, y, w, h;
+    r_present_rect(400, 240, NULL, &x, &y, &w, &h);
+    float cpx = (float)FL_SCREEN_W / (float)(w > 0 ? w : 400); /* canvas pixels per screen pixel */
+    float far_px = slider * 10.f * cpx, pop_px = slider * 3.f * cpx;
+    float k = far_px / (zc - R.st_far);                       /* disparity (canvas px) per unit of z */
+    float half = 0.5f * 2.f / (float)FL_SCREEN_W;             /* each eye: half the disparity, in NDC */
+    for (int e = 0; e < 2; e++) {
+        float sg = e ? 1.f : -1.f;                            /* left eye -, right eye + */
+        R.st_uni[e][0] = sg * half * k * zc;
+        R.st_uni[e][1] = -sg * half * k;
+        R.st_uni[e][2] = e ? -half * pop_px : -half * far_px;
+        R.st_uni[e][3] = e ? half * far_px : half * pop_px;
+    }
+}
+
+/* deferred: after C3D_FrameBegin, the recorded frame into citro3d (once per
+ * eye when slider > 0); then the caller's C3D_FrameEnd */
+void r3ds_frame_submit(float slider)
+{
+    if (!R.deferred) {
+        r3ds_frame_finish();
+        return;
+    }
+    r_flush();
+    mesh_sync_z(); /* every mesh job's vertices are in the ring */
+    r3ds_char_frame_finish();
+    if (R.vused) GSPGPU_FlushDataCache(R.vring[R.frame & 1], R.vused);
+    int eyes = slider > 0.f ? 2 : 1;
+    stereo_params(eyes == 2 ? slider : 0.f);
+    R.st_track = eyes == 2;
+    R.chars_prev = R.chars_now;
+    for (int e = 0; e < eyes; e++)
+        C3D_RenderTargetClear(R.top_rt[e], C3D_CLEAR_COLOR, 0x000000FF, 0);
+    for (int e = 0; e < eyes; e++) {
+        G.eye = e;
+        g_invalidate();
+        int i = 0;
+        if (e == 0 && R.nrec > 0 && R.rec[0].clear) {
+            /* the frame opens with the canvas clear: a GX memory fill of
+             * colour and depth (window depth 0) instead of a full-screen
+             * quad through the GPU; it runs before the frame's draws.  The
+             * other eye's pass, after this one's present, keeps the quad. */
+            C3D_RenderTargetClear(R.canvas_rt, C3D_CLEAR_ALL, R.rec[0].clear_rgba, 0);
+            i = 1;
+        }
+        for (; i < R.nrec; i++) replay_rec(&R.rec[i]);
+    }
+    g_invalidate();
+    G.eye = 0;
+    R.eyes_last = eyes;
+    R.in_frame = 0;
+}
+
+int r3ds_frame_records(void) { return R.nrec; }
+void r3ds_stereo_info(float *zfar, float *znear, int *eyes)
+{
+    if (zfar) *zfar = R.st_have ? R.st_far : 0.f;
+    if (znear) *znear = R.st_have ? R.st_near : 0.f;
+    if (eyes) *eyes = R.eyes_last;
 }
 
 /* ---------------- palettes ---------------- */
@@ -517,8 +884,15 @@ void r_pal_write(int row, int first, int n, const uint8_t *rgba)
 {
     if (row < 0 || row >= R_PAL_ROWS || first < 0 || first >= 256) return;
     if (first + n > 256) n = 256 - first;
+    /* the game rewrites palettes with the same colours every frame: only a
+     * real change flushes the batch and makes a new version (expansions and
+     * character tiles are rebuilt per version) */
+    uint32_t *dst = &R.pal_rgba[row][first];
+    int k = 0;
+    while (k < n && dst[k] == pica_rgba8(rgba + 4 * k)) k++;
+    if (k == n) return;
     r_flush(); /* batched draws keep the colours they were given */
-    for (int k = 0; k < n; k++) R.pal_rgba[row][first + k] = pica_rgba8(rgba + 4 * k);
+    for (; k < n; k++) dst[k] = pica_rgba8(rgba + 4 * k);
     R.pal_ver[row]++;
 }
 
@@ -656,8 +1030,8 @@ void fl_tex_update(uint32_t handle, int x, int y, int w, int h, const void *pixe
         t->ver++; /* expansions are rebuilt on their next use */
         return;
     }
-    if (t->used_frame == R.frame) {
-        /* drawn with in this frame: write a copy, free the old one later */
+    if (in_flight(t->used_frame)) {
+        /* drawn with in a frame the GPU may still be drawing: write a copy, free the old one later */
         C3D_Tex *n = tex_new(t->pw, t->ph, GPU_RGBA8);
         if (!n) return;
         memcpy(n->data, t->rgba->data, n->size);
@@ -715,7 +1089,7 @@ void r3ds_ext_unregister(GLuint id)
 }
 
 /* keep expansions within EXP_BUDGET: drop the least recently used ones that
- * no draw of this frame uses */
+ * no frame in flight uses */
 static void exp_trim(size_t need)
 {
     while (R.exp_bytes + need > EXP_BUDGET) {
@@ -724,7 +1098,7 @@ static void exp_trim(size_t need)
             if (!R.tex[i].used || !R.tex[i].idx) continue;
             for (int k = 0; k < EXP_PER_TEX; k++) {
                 Exp *e = &R.tex[i].exp[k];
-                if (e->t && e->last != R.frame && (!old || e->last < old->last)) old = e;
+                if (e->t && !in_flight(e->last) && (!old || e->last < old->last)) old = e;
             }
         }
         if (!old) return;
@@ -733,6 +1107,52 @@ static void exp_trim(size_t need)
 }
 
 /* the RGBA8 expansion of indexed texture t with palette row `row` */
+/* the format of an expansion: 16 bits when the palette's alphas allow (all
+ * opaque: RGB565, only 0 / 255: RGBA5551), half the texture bandwidth of the
+ * GPU; RGBA8 otherwise */
+static GPU_TEXCOLOR exp_fmt(const TexRec *t, const uint32_t *pal)
+{
+    int n = t->fmt == FL_TEX_IDX4 ? 16 : 256, opaque = 1;
+    for (int i = 0; i < n; i++) {
+        uint32_t a = pal[i] & 255;
+        if (a != 255) {
+            opaque = 0;
+            if (a != 0) return GPU_RGBA8;
+        }
+    }
+    return opaque ? GPU_RGB565 : GPU_RGBA5551;
+}
+
+static void put_exp(C3D_Tex *d, const TexRec *t, const uint32_t *pal)
+{
+    if (d->fmt == GPU_RGBA8) {
+        put_indexed(d, t->w, t->h, t->idx, t->w, pal);
+        return;
+    }
+    uint16_t lut[256];
+    int n = t->fmt == FL_TEX_IDX4 ? 16 : 256;
+    for (int i = 0; i < 256; i++) {
+        uint32_t c = i < n ? pal[i] : 0, r = c >> 24, g = (c >> 16) & 255, b = (c >> 8) & 255;
+        lut[i] = d->fmt == GPU_RGB565 ? (uint16_t)((r >> 3) << 11 | (g >> 2) << 5 | (b >> 3))
+                                      : (uint16_t)((r >> 3) << 11 | (g >> 3) << 6 | (b >> 3) << 1 | ((c & 255) ? 1 : 0));
+    }
+    uint16_t *dd = (uint16_t *)d->data;
+    const int pw = d->width, ph = d->height;
+    for (int ty = 0; ty < t->h; ty += 8) {
+        int rows = t->h - ty < 8 ? t->h - ty : 8;
+        for (int tx = 0; tx < t->w; tx += 8) {
+            int cols = t->w - tx < 8 ? t->w - tx : 8;
+            for (int r = 0; r < rows; r++) {
+                uint32_t my = img_row(ty + r, ph);
+                uint16_t *tile = dd + ((((my >> 3) * (uint32_t)(pw >> 3)) + ((uint32_t)tx >> 3)) << 6);
+                const uint8_t *mrow = morton + ((my & 7) << 3);
+                const uint8_t *s = t->idx + (size_t)(ty + r) * t->w + tx;
+                for (int c = 0; c < cols; c++) tile[mrow[c]] = lut[s[c]];
+            }
+        }
+    }
+}
+
 static C3D_Tex *expansion(TexRec *t, int row)
 {
     uint32_t pv;
@@ -747,16 +1167,18 @@ static C3D_Tex *expansion(TexRec *t, int row)
         return hit->t;
     }
     if (hit) {
-        if (hit->last != R.frame) {
-            /* not drawn this frame: rebuild in place */
-            put_indexed(hit->t, 0, 0, t->w, t->h, t->idx, t->w, pal);
+        if (!in_flight(hit->last) && hit->t->fmt == exp_fmt(t, pal)) {
+            /* not drawn in a frame the GPU may still draw: rebuild in place */
+            uint64_t t0 = RP_T();
+            put_exp(hit->t, t, pal);
             C3D_TexFlush(hit->t);
+            RP_ADD(RP_TEX, t0);
             hit->pal_ver = pv;
             hit->tex_ver = t->ver;
             hit->last = R.frame;
             return hit->t;
         }
-        exp_drop(hit, 1); /* this frame's draws keep the old one */
+        exp_drop(hit, 1); /* the draws in flight keep the old one */
         slot = hit;
     }
     if (!slot) {
@@ -766,16 +1188,19 @@ static C3D_Tex *expansion(TexRec *t, int row)
     if (!slot) {
         for (int k = 0; k < EXP_PER_TEX; k++) {
             Exp *e = &t->exp[k];
-            if (e->last != R.frame && (!slot || e->last < slot->last)) slot = e;
+            if (!in_flight(e->last) && (!slot || e->last < slot->last)) slot = e;
         }
-        if (!slot) return NULL; /* all rows of this texture drawn this frame */
+        if (!slot) return NULL; /* all rows of this texture in flight */
         exp_drop(slot, 1);
     }
-    exp_trim((size_t)t->pw * t->ph * 4);
-    C3D_Tex *n = tex_new(t->pw, t->ph, GPU_RGBA8);
+    uint64_t t0 = RP_T();
+    GPU_TEXCOLOR fmt = exp_fmt(t, pal);
+    exp_trim((size_t)t->pw * t->ph * (fmt == GPU_RGBA8 ? 4 : 2));
+    C3D_Tex *n = tex_new(t->pw, t->ph, fmt);
     if (!n) return NULL;
-    put_indexed(n, 0, 0, t->w, t->h, t->idx, t->w, pal);
+    put_exp(n, t, pal);
     C3D_TexFlush(n);
+    RP_ADD(RP_TEX, t0);
     slot->t = n;
     slot->row = row;
     slot->pal_ver = pv;
@@ -826,7 +1251,10 @@ void r_canvas_bind(void)
             q[k].c[0] = (uint8_t)(c >> 16); q[k].c[1] = (uint8_t)(c >> 8); q[k].c[2] = (uint8_t)c; q[k].c[3] = 255;
         }
         DrawMode m = { NULL, 1.f, 1.f, 0, 0, 0, 2, 0, 0, 0, 0, 0 };
-        emit(q, 6, &m);
+        R.rec_is_clear = 1;
+        R.rec_clear = (c & 0xFFFFFFu) << 8 | 0xFFu;
+        emit(q, 6, &m, ST_FLAT);
+        R.rec_is_clear = 0;
         R.clear_pending = 0;
         R.drawn = 0;
     }
@@ -834,13 +1262,27 @@ void r_canvas_bind(void)
     R.drawn = 1;
 }
 
+/* stereo class of a 2D batch: the fighters (character tile pages) and what
+ * follows them stay on the screen plane; in a fight (fighters drawn last
+ * frame) the 2D drawn before them is the stage's and gets its depth */
+static int class_2d(GLuint tex)
+{
+    if (tex >= ID_EXT0 && tex < ID_EXT0 + MAX_EXT) {
+        R.chars_now = 1;
+        return ST_FLAT;
+    }
+    if (R.in_overlay) return ST_FLAT;
+    return (R.chars_prev && !R.chars_now) ? ST_DEPTH : ST_FLAT;
+}
+
 static void draw_batch(const RVtx *v, int n, GLuint tex, int mode)
 {
     int linear = r_texture_filter_linear();
     int clamp = (R.state_ad0 & 0x20000) ? 1 : 0;
     DrawMode m = { NULL, 1.f, 1.f, linear, clamp, R.in_overlay ? 2 : 1, R.in_overlay ? 0 : 1, !R.in_overlay, !R.in_overlay, 0, 0, 0 };
+    int st = class_2d(tex);
     if (mode == RM_FLAT) {
-        emit(v, n, &m);
+        emit(v, n, &m, st);
         return;
     }
     if (mode == RM_INDEX) {
@@ -850,13 +1292,13 @@ static void draw_batch(const RVtx *v, int n, GLuint tex, int mode)
             int e = s + 3;
             while (e + 3 <= n && v[e].pal == v[s].pal) e += 3;
             m.tex = resolve(tex, (int)v[s].pal, &m.su, &m.sv);
-            if (m.tex) emit(v + s, e - s, &m);
+            if (m.tex) emit(v + s, e - s, &m, st);
             s = e;
         }
         return;
     }
     m.tex = resolve(tex, 0, &m.su, &m.sv);
-    if (m.tex) emit(v, n, &m);
+    if (m.tex) emit(v, n, &m, st);
 }
 
 void r_flush(void)
@@ -917,8 +1359,8 @@ float r_depth_of(float z)
     float d = -z;
     return d < -1.f ? -1.f : d > 1.f ? 1.f : d;
 }
-float r_snap_x(float x) { return floorf(x - (float)R.origin_x); }
-float r_snap_y(float y) { return floorf(y - (float)R.origin_y); }
+float r_snap_x(float x) { return ffloor(x - (float)R.origin_x); }
+float r_snap_y(float y) { return ffloor(y - (float)R.origin_y); }
 
 /* ---------------- blend: func_003E06D0 (as r_gl.c) ---------------- */
 static void set_blend_from_state(void)
@@ -1136,24 +1578,37 @@ void r_viewport(int vi[4], float vf[2]) { memcpy(vi, R.vp_i, 16); memcpy(vf, R.v
 const uint8_t *r_material_slot(int i) { return R.materials[i]; }
 const uint8_t *r_light(int i) { return R.lights[i]; }
 void r_count_draw(int verts) { R.draws++; R.frame_verts += verts; }
-void r_apply_state(void) { }  /* the 3DS emit() applies blend/depth per draw */
+void r_apply_state(void) { }  /* the 3DS records carry blend/depth per draw */
 
 /* ---------------- meshes: r_mesh.c's glDrawElements ----------------
  * The uniforms r_mesh.c set (gls_uniform) drive mesh.v.pica; the fragment
  * part of its GL shader is the TEV:
  *   stage 0: texture * colour (x2: the PS2's 128 = 1.0), or the colour
  *            (rgb x1 from 255 units, alpha x2 from 128 units)
- *   stage 1: fog = mix(fog colour, colour, f), f from the fog ramp texture */
-static int Ui(const char *name);
-static const float *U(const char *name)
+ *   stage 1: fog = mix(fog colour, colour, f), f from the fog ramp texture
+ * The uniform slots are looked up by name once (r_mesh_init creates them all). */
+enum { UN_MVP, UN_VP, UN_VPZ, UN_FLAGS, UN_CSCALE, UN_LCLAMP, UN_MOD, UN_MATCOL, UN_UV0, UN_UV1, UN_UV3,
+       UN_FOG, UN_FOGCOL, UN_LDIR, UN_LCOL, UN_LAMB, UN_MODE, UN_LINEAR, UN_CLAMP, UN_PALROW, UN_N };
+static const char *const un_name[UN_N] = {
+    "u_mvp", "u_vp", "u_vpz", "u_flags", "u_cscale", "u_lclamp", "u_mod", "u_matcol", "u_uv0", "u_uv1", "u_uv3",
+    "u_fog", "u_fogcol", "u_ldir", "u_lcol", "u_lamb", "u_mode", "u_linear", "u_clamp", "u_palrow" };
+static const GlsUniform *un_slot[UN_N];
+
+static const GlsUniform *un(int i)
+{
+    if (!un_slot[i]) un_slot[i] = gls_uniform_slot(un_name[i]);
+    const GlsUniform *u = un_slot[i];
+    return (u && u->count) ? u : NULL; /* as gls_uniform: set at least once */
+}
+static const float *U(int i)
 {
     static const float zero[16];
-    const GlsUniform *u = gls_uniform(name);
+    const GlsUniform *u = un(i);
     return u ? u->f : zero;
 }
-static int Ui(const char *name)
+static int Ui(int i)
 {
-    const GlsUniform *u = gls_uniform(name);
+    const GlsUniform *u = un(i);
     return u ? u->i : 0;
 }
 
@@ -1162,8 +1617,13 @@ static int mesh_off, mesh_logged, mesh_rejects, mesh_mode;
 void r3ds_set_mesh_enabled(int on) { mesh_off = !on; }
 /* R3DS_MESH_CPU (default): vertices transformed, lit and coloured on the CPU
  * and drawn through the 2D shader and pipeline.  The GPU paths (mesh.v.pica)
- * hung the console on the first mesh on hardware; the self-test bisects them. */
-void r3ds_set_mesh_mode(int mode) { mesh_mode = mode; }
+ * hung the console on the first mesh on hardware; the self-test bisects them
+ * (immediate replay only: they drive citro3d directly). */
+void r3ds_set_mesh_mode(int mode)
+{
+    mesh_mode = mode;
+    gls_set_cpu_only(mode == R3DS_MESH_CPU);
+}
 int r3ds_mesh_rejects(void) { return mesh_rejects; }
 
 static void mesh_reject(const char *why, const GlsDraw *d, unsigned v)
@@ -1211,13 +1671,13 @@ static inline void mesh_xform(const MeshCtx *x, const float *V, RVtx *q)
         d0 = d0 > 0.f ? d0 : 0.f; d1 = d1 > 0.f ? d1 : 0.f; d2 = d2 > 0.f ? d2 : 0.f;
         for (int ch = 0; ch < 3; ch++) {
             float v = lc[ch] * d0 + lc[4 + ch] * d1 + lc[8 + ch] * d2 + la[ch];
-            c[ch] = floorf((v < x->lclamp ? v : x->lclamp) * x->md[ch]);
+            c[ch] = ffloor((v < x->lclamp ? v : x->lclamp) * x->md[ch]);
         }
-        c[3] = floorf(la[3] * x->md[3]);
+        c[3] = ffloor(la[3] * x->md[3]);
     } else if (x->mat) {
         for (int ch = 0; ch < 4; ch++) c[ch] = x->mc[ch];
     } else {
-        for (int ch = 0; ch < 4; ch++) c[ch] = floorf(V[6 + ch] * x->cs[ch] * x->md[ch]);
+        for (int ch = 0; ch < 4; ch++) c[ch] = ffloor(V[6 + ch] * x->cs[ch] * x->md[ch]);
     }
     if (x->fog_col) {
         float f = (x->fp[0] - cw) * x->fp[1];
@@ -1238,60 +1698,230 @@ static inline void mesh_xform(const MeshCtx *x, const float *V, RVtx *q)
     q->pal = 0.f;
 }
 
-/* The mesh shader done on the CPU (the same maths as mesh.v.pica / r_mesh.c's
- * k_mvs), drawn through the 2D shader: x/y in canvas pixels with w, so the
- * 2D shader's clip = (pixels -> NDC) * w is the mesh's own clip position and
- * the GPU clips and interpolates perspective-correctly as with the shader.
- * Colour in GS units goes out as bytes with the TEV x2 (128 = 1.0).  Fog is
- * applied for untextured meshes (to the colour); textured ones are drawn
- * without it for now (it needs a second colour the 2D shader does not have).
- * Each vertex the indices use is transformed once (into `xv`), then the
- * triangle list is gathered from those. */
-static RVtx *xv;
+/* ---- mesh jobs: the CPU transform on another core ----
+ * A mesh draw becomes a job: its uniforms copied, its vertex range of the
+ * ring reserved and its record made at once (on the game's thread), the
+ * transform itself (mesh_job_run) on a worker thread on core 2 of a New 3DS
+ * while the game goes on.  The source buffers stay put until the job is
+ * done: the GL shim waits (r3ds_mesh_sync) before it writes or frees a
+ * buffer, and r3ds_frame_submit waits before the frame goes to the GPU.
+ * Without core 2 (or not deferred: the self-test) jobs run inline. */
+typedef struct MeshJob {
+    float m[16], vp[4], cs[4], md[4], mc[4], u0[4], u1[4], u3[4], fp[4], fc[4], ld[12], lc[12], la[4];
+    float vpz, lclamp;
+    int lit, mat, uvx, fog_col;
+    const uint8_t *vb;
+    const void *idx;
+    int isz, count;
+    uint32_t mn, mx;
+    uint32_t nv;      /* vertices in vb; scan: [mn, mx] found and checked by the job */
+    int scan;
+    RVtx *out;
+} MeshJob;
+
+#define MAX_JOBS 1024
+static struct {
+    MeshJob job[MAX_JOBS];
+    volatile uint32_t posted, done;   /* jobs handed out / finished (wrapping counters) */
+    LightSemaphore sem;
+    Thread thr;
+    volatile int quit, on;
+    float zlo, zhi;                   /* the worker's depth range (stereo), merged at the sync */
+    RVtx *xv;                         /* the worker's unique-vertex scratch */
+    size_t xv_cap;
+} MJ;
+
+static RVtx *xv;                      /* the game thread's scratch (inline jobs) */
 static size_t xv_cap;
 
-static void mesh_draw_cpu(const GlsDraw *d, size_t isz, C3D_Tex *tex, float su, float sv,
-                          int lit, int mat, int uvx, int fog, int textured)
+static void mesh_job_run(const MeshJob *j, RVtx **scratch, size_t *cap, float *zlo, float *zhi, int track)
 {
-    RVtx *o = (RVtx *)ring_alloc(sizeof(RVtx) * (size_t)d->count);
-    if (!o) { mesh_reject("vertex ring full", d, 0); return; }
-    const GlsUniform *um = gls_uniform("u_mvp");
-    static const float ident[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
     MeshCtx x;
-    x.m = um ? um->m : ident;
-    x.vp = U("u_vp"); x.cs = U("u_cscale"); x.md = U("u_mod"); x.mc = U("u_matcol");
-    x.u0 = U("u_uv0"); x.u1 = U("u_uv1"); x.u3 = U("u_uv3"); x.fp = U("u_fog"); x.fc = U("u_fogcol");
-    x.ld = U("u_ldir"); x.lc = U("u_lcol"); x.la = U("u_lamb");
-    x.vpz = U("u_vpz")[0];
-    x.lclamp = U("u_lclamp")[0];
-    x.lit = lit; x.mat = mat; x.uvx = uvx; x.fog_col = fog && !textured;
-
-#define IDX(k) (isz == 4 ? ((const uint32_t *)d->indices)[k] : isz == 2 ? ((const uint16_t *)d->indices)[k] \
-                                                                    : ((const uint8_t *)d->indices)[k])
-    uint32_t mn = 0xFFFFFFFFu, mx = 0;
-    for (int k = 0; k < d->count; k++) {
-        uint32_t ix = IDX(k);
-        if (ix < mn) mn = ix;
-        if (ix > mx) mx = ix;
+    x.m = j->m; x.vp = j->vp; x.cs = j->cs; x.md = j->md; x.mc = j->mc;
+    x.u0 = j->u0; x.u1 = j->u1; x.u3 = j->u3; x.fp = j->fp; x.fc = j->fc;
+    x.ld = j->ld; x.lc = j->lc; x.la = j->la;
+    x.vpz = j->vpz; x.lclamp = j->lclamp;
+    x.lit = j->lit; x.mat = j->mat; x.uvx = j->uvx; x.fog_col = j->fog_col;
+    RVtx *o = j->out;
+    uint32_t mn = j->mn, mx = j->mx;
+    if (j->scan) {
+        /* the index range (and that it stays inside the vertices) */
+        mn = 0xFFFFFFFFu;
+        mx = 0;
+        if (j->isz == 2) {
+            const uint16_t *ix = (const uint16_t *)j->idx;
+            for (int k = 0; k < j->count; k++) { uint32_t v = ix[k]; if (v < mn) mn = v; if (v > mx) mx = v; }
+        } else if (j->isz == 4) {
+            const uint32_t *ix = (const uint32_t *)j->idx;
+            for (int k = 0; k < j->count; k++) { uint32_t v = ix[k]; if (v < mn) mn = v; if (v > mx) mx = v; }
+        } else {
+            const uint8_t *ix = (const uint8_t *)j->idx;
+            for (int k = 0; k < j->count; k++) { uint32_t v = ix[k]; if (v < mn) mn = v; if (v > mx) mx = v; }
+        }
+        if (mx >= j->nv) {
+            memset(o, 0, sizeof(RVtx) * (size_t)j->count); /* degenerate: draws nothing */
+            return;
+        }
     }
     size_t nu = (size_t)(mx - mn + 1);
-    if (nu < (size_t)d->count) {
-        if (nu > xv_cap) {
-            RVtx *n = (RVtx *)realloc(xv, nu * sizeof *n);
-            if (!n) { mesh_reject("out of memory", d, (unsigned)nu); return; }
-            xv = n;
-            xv_cap = nu;
+    const RVtx *zsrc = o;
+    size_t zn = (size_t)j->count;
+    if (nu < (size_t)j->count && (nu <= *cap || (*scratch = (RVtx *)realloc(*scratch, (*cap = nu) * sizeof(RVtx))))) {
+        RVtx *u = *scratch;
+        for (size_t i = 0; i < nu; i++) mesh_xform(&x, (const float *)(j->vb + (mn + i) * 48), &u[i]);
+        if (j->isz == 2) {
+            const uint16_t *ix = (const uint16_t *)j->idx;
+            for (int k = 0; k < j->count; k++) o[k] = u[ix[k] - mn];
+        } else if (j->isz == 4) {
+            const uint32_t *ix = (const uint32_t *)j->idx;
+            for (int k = 0; k < j->count; k++) o[k] = u[ix[k] - mn];
+        } else {
+            const uint8_t *ix = (const uint8_t *)j->idx;
+            for (int k = 0; k < j->count; k++) o[k] = u[ix[k] - mn];
         }
-        for (size_t i = 0; i < nu; i++) mesh_xform(&x, (const float *)(d->vbuf + (mn + i) * 48), &xv[i]);
-        for (int k = 0; k < d->count; k++) o[k] = xv[IDX(k) - mn];
+        zsrc = u;
+        zn = nu;
     } else {
-        for (int k = 0; k < d->count; k++) mesh_xform(&x, (const float *)(d->vbuf + (size_t)IDX(k) * 48), &o[k]);
+        for (int k = 0; k < j->count; k++) {
+            uint32_t ix = j->isz == 2 ? ((const uint16_t *)j->idx)[k] : j->isz == 4 ? ((const uint32_t *)j->idx)[k]
+                                                                                  : ((const uint8_t *)j->idx)[k];
+            mesh_xform(&x, (const float *)(j->vb + (size_t)ix * 48), &o[k]);
+        }
     }
-#undef IDX
-    int linear = Ui("u_linear"), clamp = Ui("u_clamp");
+    if (track) {
+        float lo = *zlo, hi = *zhi;
+        for (size_t i = 0; i < zn; i++) {
+            float z = zsrc[i].z;
+            if (zsrc[i].w <= 0.f || z < -1.f || z > 1.f) continue;
+            if (z < lo) lo = z;
+            if (z > hi) hi = z;
+        }
+        *zlo = lo;
+        *zhi = hi;
+    }
+}
+
+static volatile int mj_track;
+
+static void mesh_worker(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        LightSemaphore_Acquire(&MJ.sem, 1);
+        if (MJ.quit) break;
+        uint32_t i = MJ.done;
+        __sync_synchronize();
+        mesh_job_run(&MJ.job[i % MAX_JOBS], &MJ.xv, &MJ.xv_cap, &MJ.zlo, &MJ.zhi, mj_track);
+        __sync_synchronize();
+        MJ.done = i + 1;
+    }
+}
+
+/* the worker on core 2 (New 3DS); 0 = running */
+static int mesh_worker_start(void)
+{
+    if (MJ.thr) return 0;
+    LightSemaphore_Init(&MJ.sem, 0, MAX_JOBS + 8);
+    MJ.zlo = 1.f;
+    MJ.zhi = -1.f;
+    s32 prio = 0x30;
+    svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+    MJ.thr = threadCreate(mesh_worker, NULL, 64 * 1024, prio, 2, false);
+    MJ.on = MJ.thr != NULL;
+    fprintf(stderr, "[r3ds] mesh transform worker %s\n", MJ.on ? "on core 2" : "unavailable (inline)");
+    return MJ.on ? 0 : -1;
+}
+
+static void mesh_worker_stop(void)
+{
+    if (!MJ.thr) return;
+    r3ds_mesh_sync();
+    MJ.quit = 1;
+    LightSemaphore_Release(&MJ.sem, 1);
+    threadJoin(MJ.thr, U64_MAX);
+    threadFree(MJ.thr);
+    MJ.thr = NULL;
+    MJ.on = 0;
+}
+
+/* every job handed out is done (the GL shim calls this before it touches a buffer) */
+void r3ds_mesh_sync(void)
+{
+    if (!MJ.on || MJ.done == MJ.posted) return;
+    uint64_t t0 = RP_T();
+    while (MJ.done != MJ.posted) svcSleepThread(20000);
+    __sync_synchronize();
+    RP_ADD(RP_MESHWAIT, t0);
+}
+
+/* only when a job not yet done reads [p, p + n) (a buffer the GL shim is
+ * about to write or free) */
+void r3ds_mesh_sync_buf(const void *p, size_t n)
+{
+    if (!MJ.on || MJ.done == MJ.posted || !p) return;
+    const uint8_t *lo = (const uint8_t *)p, *hi = lo + n;
+    for (uint32_t i = MJ.done; i != MJ.posted; i++) {
+        const MeshJob *j = &MJ.job[i % MAX_JOBS];
+        if ((j->vb >= lo && j->vb < hi) || ((const uint8_t *)j->idx >= lo && (const uint8_t *)j->idx < hi)) {
+            r3ds_mesh_sync();
+            return;
+        }
+    }
+}
+
+static void mesh_sync_z(void)
+{
+    r3ds_mesh_sync();
+    if (MJ.zlo < R.zlo) R.zlo = MJ.zlo;
+    if (MJ.zhi > R.zhi) R.zhi = MJ.zhi;
+    MJ.zlo = 1.f;
+    MJ.zhi = -1.f;
+}
+
+static void mesh_draw_cpu(const GlsDraw *d, size_t isz, uint32_t mn, uint32_t mx, C3D_Tex *tex, float su, float sv,
+                          int lit, int mat, int uvx, int fog, int textured)
+{
+    uint64_t t0 = RP_T();
+    RVtx *o;
+    int32_t first = ring_alloc_vtx(d->count, &o);
+    if (first < 0) { mesh_reject("vertex ring full", d, 0); return; }
+    int worker = MJ.on && R.deferred;
+    if (worker && MJ.posted - MJ.done >= MAX_JOBS) r3ds_mesh_sync(); /* the queue is full */
+    static MeshJob local;
+    MeshJob *j = worker ? &MJ.job[MJ.posted % MAX_JOBS] : &local;
+    static const float ident[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+    const GlsUniform *um = un(UN_MVP);
+    memcpy(j->m, um ? um->m : ident, sizeof j->m);
+#define CP(dst, u, n) memcpy(j->dst, U(u), sizeof(float) * (n))
+    CP(vp, UN_VP, 4); CP(cs, UN_CSCALE, 4); CP(md, UN_MOD, 4); CP(mc, UN_MATCOL, 4);
+    CP(u0, UN_UV0, 4); CP(u1, UN_UV1, 4); CP(u3, UN_UV3, 4); CP(fp, UN_FOG, 4); CP(fc, UN_FOGCOL, 4);
+    CP(ld, UN_LDIR, 12); CP(lc, UN_LCOL, 12); CP(la, UN_LAMB, 4);
+#undef CP
+    j->vpz = U(UN_VPZ)[0];
+    j->lclamp = U(UN_LCLAMP)[0];
+    j->lit = lit; j->mat = mat; j->uvx = uvx; j->fog_col = fog && !textured;
+    j->vb = d->vbuf;
+    j->idx = d->indices;
+    j->isz = (int)isz;
+    j->count = d->count;
+    j->mn = mn;
+    j->mx = mx;
+    j->nv = (uint32_t)(d->vsize / 48);
+    j->scan = mx == 0xFFFFFFFFu; /* r3ds_mesh_draw left the range to the job */
+    j->out = o;
+    if (worker) {
+        mj_track = R.st_track;
+        __sync_synchronize();
+        MJ.posted++;
+        LightSemaphore_Release(&MJ.sem, 1);
+    } else {
+        mesh_job_run(j, &xv, &xv_cap, &R.zlo, &R.zhi, R.st_track);
+    }
+    int linear = Ui(UN_LINEAR), clamp = Ui(UN_CLAMP);
     /* textured: tex * c * 2 (c in GS units, 128 = 1.0); untextured: rgb c / 255, alpha c * 2 / 255 */
     DrawMode dm = { tex, su, sv, linear, clamp, 1, 1, 1, 1, textured, 1, 1 };
-    emit_state(&dm, o, d->count);
+    record(&dm, (uint32_t)first, d->count, ST_DEPTH);
+    RP_ADD(RP_MESH, t0);
 }
 
 void r3ds_mesh_draw(const GlsDraw *d)
@@ -1301,27 +1931,35 @@ void r3ds_mesh_draw(const GlsDraw *d)
     const GlsAttrib *a = d->attr;
     if (!a[0].enabled || a[0].stride != 48 || a[0].offset != 0) { mesh_reject("not an MVtx buffer", d, (unsigned)a[0].stride); return; }
     if (!d->vbuf || d->vsize < 48) { mesh_reject("no vertex buffer", d, 0); return; }
-    /* every index inside the vertex buffer: a GPU read past it can hang the console */
-    {
-        size_t isz = d->itype == GL_UNSIGNED_INT ? 4 : d->itype == GL_UNSIGNED_SHORT ? 2 : 1;
-        if ((size_t)d->count * isz > d->isize) { mesh_reject("index range past its buffer", d, (unsigned)d->isize); return; }
-        uint32_t nv = (uint32_t)(d->vsize / 48), mx = 0;
-        for (int k = 0; k < d->count; k++) {
-            uint32_t ix = isz == 4 ? ((const uint32_t *)d->indices)[k] : isz == 2 ? ((const uint16_t *)d->indices)[k]
-                                                                                   : ((const uint8_t *)d->indices)[k];
-            if (ix > mx) mx = ix;
-        }
-        if (mx >= nv) { mesh_reject("index past the vertices", d, mx); return; }
-        if (mesh_logged < 8) {
-            mesh_logged++;
-            fprintf(stderr, "[r3ds] mesh draw %d: %d indices (max %u) over %u vertices, vbuf %p, ib %p, flags %d\n",
-                    mesh_logged, (int)d->count, (unsigned)mx, (unsigned)nv, (const void *)d->vbuf, d->indices, Ui("u_flags"));
-        }
+    /* every index inside the vertex buffer: a GPU read past it can hang the
+     * console (and the CPU path reads them too); one pass gives the range */
+    size_t isz = d->itype == GL_UNSIGNED_INT ? 4 : d->itype == GL_UNSIGNED_SHORT ? 2 : 1;
+    if ((size_t)d->count * isz > d->isize) { mesh_reject("index range past its buffer", d, (unsigned)d->isize); return; }
+    uint32_t nv = (uint32_t)(d->vsize / 48), mn = 0xFFFFFFFFu, mx = 0;
+    int job_scans = MJ.on && R.deferred && mesh_logged >= 8; /* the worker finds the range (and checks it) */
+    if (job_scans) {
+        mn = 0;
+        mx = 0xFFFFFFFFu;
+    } else if (isz == 2) {
+        const uint16_t *ix = (const uint16_t *)d->indices;
+        for (int k = 0; k < d->count; k++) { uint32_t v = ix[k]; if (v < mn) mn = v; if (v > mx) mx = v; }
+    } else if (isz == 4) {
+        const uint32_t *ix = (const uint32_t *)d->indices;
+        for (int k = 0; k < d->count; k++) { uint32_t v = ix[k]; if (v < mn) mn = v; if (v > mx) mx = v; }
+    } else {
+        const uint8_t *ix = (const uint8_t *)d->indices;
+        for (int k = 0; k < d->count; k++) { uint32_t v = ix[k]; if (v < mn) mn = v; if (v > mx) mx = v; }
+    }
+    if (!job_scans && mx >= nv) { mesh_reject("index past the vertices", d, mx); return; }
+    if (mesh_logged < 8) {
+        mesh_logged++;
+        fprintf(stderr, "[r3ds] mesh draw %d: %d indices (max %u) over %u vertices, vbuf %p, ib %p, flags %d\n",
+                mesh_logged, (int)d->count, (unsigned)mx, (unsigned)nv, (const void *)d->vbuf, d->indices, Ui(UN_FLAGS));
     }
     r_flush();
     r_canvas_bind();
 
-    int flags = Ui("u_flags");
+    int flags = Ui(UN_FLAGS);
     int lit = (flags & 4) != 0, mat = !lit && (flags & 2) != 0, vtx = !lit && !mat;
     int uvx = (flags & 8) != 0, fog = (flags & 16) != 0, textured = (flags & 32) != 0;
 
@@ -1329,16 +1967,16 @@ void r3ds_mesh_draw(const GlsDraw *d)
     float su = 1.f, sv = 1.f;
     C3D_Tex *tex = NULL;
     if (textured) {
-        int mode = Ui("u_mode"), row = (int)U("u_palrow")[0];
+        int mode = Ui(UN_MODE), row = (int)U(UN_PALROW)[0];
         tex = resolve(d->tex[0], mode == RM_INDEX ? row : 0, &su, &sv);
         if (!tex) tex = &R.white;
     }
 
-    size_t isz = d->itype == GL_UNSIGNED_INT ? 4 : d->itype == GL_UNSIGNED_SHORT ? 2 : 1;
-    if (mesh_mode == R3DS_MESH_CPU) {
-        mesh_draw_cpu(d, isz, tex, su, sv, lit, mat, uvx, fog, textured);
+    if (mesh_mode == R3DS_MESH_CPU || R.deferred) {
+        mesh_draw_cpu(d, isz, mn, mx, tex, su, sv, lit, mat, uvx, fog, textured);
         return;
     }
+    /* ---- the GPU mesh paths (immediate replay only: the self-test) ---- */
     int prog = mesh_mode == R3DS_MESH_GPU_NOFOG ? 1 : 0;
     if (prog) fog = 0;
     const MeshLoc *ml = &R.mloc[prog];
@@ -1369,6 +2007,8 @@ void r3ds_mesh_draw(const GlsDraw *d)
         idx = s16;
     }
 
+    if (!G.valid) g_begin();
+    g_target(TGT_CANVAS);
     C3D_BindProgram(&R.mprog[prog]);
     C3D_AttrInfo *ai = C3D_GetAttrInfo();
     AttrInfo_Init(ai);
@@ -1382,26 +2022,26 @@ void r3ds_mesh_draw(const GlsDraw *d)
     C3D_DepthMap(true, -1.0f, 0.0f);
     C3D_CullFace(GPU_CULL_NONE);
 
-    const GlsUniform *um = gls_uniform("u_mvp");
     static const float ident[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+    const GlsUniform *um = un(UN_MVP);
     const float *m = um ? um->m : ident;
     for (int j = 0; j < 4; j++) /* GLSL u_mvp * p with the row-major array: clip.j = sum_i p_i m[4i + j] */
         C3D_FVUnifSet(GPU_VERTEX_SHADER, ml->mvp + j, m[j], m[4 + j], m[8 + j], m[12 + j]);
-    const float *vp = U("u_vp"), *fogp = U("u_fog");
+    const float *vp = U(UN_VP), *fogp = U(UN_FOG);
     C3D_FVUnifSet(GPU_VERTEX_SHADER, ml->vp, vp[0], vp[1], vp[2], vp[3]);
-    C3D_FVUnifSet(GPU_VERTEX_SHADER, ml->misc, U("u_vpz")[0], U("u_lclamp")[0], fogp[0], fogp[1]);
-    const float *cs = U("u_cscale"), *md = U("u_mod"), *mc = U("u_matcol");
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, ml->misc, U(UN_VPZ)[0], U(UN_LCLAMP)[0], fogp[0], fogp[1]);
+    const float *cs = U(UN_CSCALE), *md = U(UN_MOD), *mc = U(UN_MATCOL);
     C3D_FVUnifSet(GPU_VERTEX_SHADER, ml->cscale, cs[0], cs[1], cs[2], cs[3]);
     C3D_FVUnifSet(GPU_VERTEX_SHADER, ml->modc, md[0], md[1], md[2], md[3]);
     if (mat) C3D_FVUnifSet(GPU_VERTEX_SHADER, ml->matsel, mc[0], mc[1], mc[2], mc[3]);
     else C3D_FVUnifSet(GPU_VERTEX_SHADER, ml->matsel, 0, 0, 0, 0);
     C3D_FVUnifSet(GPU_VERTEX_SHADER, ml->sel, lit ? 1.f : 0.f, 0.f, vtx ? 1.f : 0.f, uvx ? 1.f : 0.f);
     C3D_FVUnifSet(GPU_VERTEX_SHADER, ml->fsel, fog ? 1.f : 0.f, fog ? 0.f : 1.f, 0.f, 0.f);
-    const float *u0 = U("u_uv0"), *u1 = U("u_uv1"), *u3 = U("u_uv3");
+    const float *u0 = U(UN_UV0), *u1 = U(UN_UV1), *u3 = U(UN_UV3);
     C3D_FVUnifSet(GPU_VERTEX_SHADER, ml->uvrow0, u0[0], u0[1], u1[0], u1[1]);
     C3D_FVUnifSet(GPU_VERTEX_SHADER, ml->uvrow1, u3[0], u3[1], 0.f, 0.f);
     C3D_FVUnifSet(GPU_VERTEX_SHADER, ml->uvscale, su, sv, 0.f, 0.f);
-    const float *ld = U("u_ldir"), *lc = U("u_lcol"), *la = U("u_lamb");
+    const float *ld = U(UN_LDIR), *lc = U(UN_LCOL), *la = U(UN_LAMB);
     for (int k = 0; k < 3; k++) {
         C3D_FVUnifSet(GPU_VERTEX_SHADER, ml->ldir + k, ld[4 * k], ld[4 * k + 1], ld[4 * k + 2], 0.f);
         C3D_FVUnifSet(GPU_VERTEX_SHADER, ml->lcol + k, lc[4 * k], lc[4 * k + 1], lc[4 * k + 2], 0.f);
@@ -1413,7 +2053,7 @@ void r3ds_mesh_draw(const GlsDraw *d)
     C3D_TexEnv *e0 = C3D_GetTexEnv(0);
     C3D_TexEnvInit(e0);
     if (tex) {
-        int linear = Ui("u_linear"), clamp = Ui("u_clamp");
+        int linear = Ui(UN_LINEAR), clamp = Ui(UN_CLAMP);
         GPU_TEXTURE_FILTER_PARAM f = linear ? GPU_LINEAR : GPU_NEAREST;
         GPU_TEXTURE_WRAP_PARAM w = clamp ? GPU_CLAMP_TO_EDGE : GPU_REPEAT;
         C3D_TexSetFilter(tex, f, f);
@@ -1430,7 +2070,7 @@ void r3ds_mesh_draw(const GlsDraw *d)
     C3D_TexEnv *e1 = C3D_GetTexEnv(1);
     C3D_TexEnvInit(e1);
     if (fog) {
-        const float *fc = U("u_fogcol");
+        const float *fc = U(UN_FOGCOL);
         unsigned r = (unsigned)(fc[0] * 255.f + .5f), g = (unsigned)(fc[1] * 255.f + .5f), b = (unsigned)(fc[2] * 255.f + .5f);
         C3D_TexBind(1, &R.fog_ramp);
         R.unit1_bound = 1;
@@ -1448,6 +2088,7 @@ void r3ds_mesh_draw(const GlsDraw *d)
     apply_state(&dm, 1); /* GS TEST: alpha * 128 >= 1 */
     if (mesh_mode == R3DS_MESH_GPU_INDEXED) C3D_DrawElements(GPU_TRIANGLES, d->count, itype, idx);
     else C3D_DrawArrays(GPU_TRIANGLES, 0, d->count);
+    g_invalidate(); /* the next record rebinds the 2D pipeline and its state */
     R.draws++;
     R.frame_verts += d->count;
 }
@@ -1544,8 +2185,9 @@ void r3ds_present(void)
     r_present_rect(400, 240, NULL, &x, &y, &w, &h);
     fl_get_display(&DW, &DH);
     /* canvas rows 0..DH-1 (top down) are texture rows 480-DH..479 from the bottom */
-    float u0 = 0.f, u1 = (float)DW / 1024.f;
-    float t_top = (float)FL_SCREEN_H / 512.f, t_bot = (float)(FL_SCREEN_H - DH) / 512.f;
+    /* (performance mode: the canvas is drawn at R.scale, in the same corner) */
+    float u0 = 0.f, u1 = (float)DW * R.scale / 1024.f;
+    float t_top = (float)FL_SCREEN_H * R.scale / 512.f, t_bot = (float)(FL_SCREEN_H - DH) * R.scale / 512.f;
     float xs[4] = { (float)x, (float)(x + w), (float)(x + w), (float)x };
     float ys[4] = { (float)y, (float)y, (float)(y + h), (float)(y + h) };
     float us[4] = { u0, u1, u1, u0 }, vs[4] = { t_top, t_top, t_bot, t_bot };
@@ -1559,7 +2201,7 @@ void r3ds_present(void)
         q[k].c[0] = q[k].c[1] = q[k].c[2] = q[k].c[3] = 255;
     }
     DrawMode m = { &R.canvas, 1.f, 1.f, 1, 1, 0, 0, 0, 0, 0, 0, 0 };
-    emit(q, 6, &m);
+    emit(q, 6, &m, ST_FLAT);
 }
 
 void r_present_ex(int W, int H, const RPresent *p) { (void)W; (void)H; (void)p; r3ds_present(); }
@@ -1689,7 +2331,7 @@ int fl_fill_screen(int mode, uint32_t c)
         q[k].c[0] = (uint8_t)(c >> 16); q[k].c[1] = (uint8_t)(c >> 8); q[k].c[2] = (uint8_t)c; q[k].c[3] = 0;
     }
     DrawMode m = { NULL, 1.f, 1.f, 0, 0, 0, mode == 1 ? 2 : 3, 0, 1, 0, 0, 0 };
-    emit(q, 6, &m);
+    emit(q, 6, &m, ST_FLAT);
     return 0;
 }
 

@@ -140,6 +140,14 @@ typedef struct GlsDraw {
 } GlsDraw;
 /* the uniform `name` as stored (NULL if never set) */
 const GlsUniform *gls_uniform(const char *name);
+/* its slot (stable once glGetUniformLocation made it; NULL if it has none) */
+const GlsUniform *gls_uniform_slot(const char *name);
+/* the GPU never reads the buffers (the renderer's CPU mesh path reads them
+ * at draw time): writes go in place, without copies or cache flushes */
+void gls_set_cpu_only(int on);
+/* r_c3d.c: the mesh jobs that read the buffers are done */
+void r3ds_mesh_sync(void);
+void r3ds_mesh_sync_buf(const void *p, size_t n); /* only if a job reads [p, p + n) */
 /* r_c3d.c: draw one mesh */
 void r3ds_mesh_draw(const GlsDraw *d);
 /* r3ds_frame_start: free the buffers retired before this frame */

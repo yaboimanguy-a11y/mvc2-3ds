@@ -1,4 +1,4 @@
-# Marvel vs. Capcom 2 on the Nintendo 3DS (v0.1)
+# Marvel vs. Capcom 2 on the Nintendo 3DS (v0.2)
 
 > **New Nintendo 3DS / New 3DS XL / New 2DS XL only.** The original 3DS,
 > 3DS XL and 2DS are too slow: the port needs the New models' 804 MHz CPU
@@ -18,7 +18,7 @@ controls, saves and disc access.
 - [Controls](#controls)
 - [The bottom screen](#the-bottom-screen)
 - [Troubleshooting](#troubleshooting)
-- [Known issues in v0.1](#known-issues-in-v01)
+- [Known issues in v0.2](#known-issues-in-v02)
 - [Building it yourself](#building-it-yourself)
 - [How the port works](#how-the-port-works)
 - [Credits and licenses](#credits-and-licenses)
@@ -45,16 +45,18 @@ controls, saves and disc access.
    `sdmc:/3ds/dspfirm.cdc`. If you already play other homebrew with sound,
    you already have it. Without it the game still runs, just silently.
 
-2. **Download the release.** Get `mvc2-3ds-v0.1.zip` from the
+2. **Download the release.** Get `mvc2-3ds-v0.2.zip` (and `mvc2.cia` if you want a HOME Menu icon) from the
    [Releases](../../../releases) page and unzip it. Inside is a folder `3ds/mvc2/`:
 
    ```
    3ds/mvc2/mvc2.3dsx            the game
-   3ds/mvc2/mvc2_rtest.3dsx      renderer self-test (no disc needed)
-   3ds/mvc2/mvc2_boottest.3dsx   speed test of the game logic, no picture
    3ds/mvc2/movelist.txt         the bottom screen's move list
+   3ds/mvc2/cacert.pem           certificates for "Check for updates"
    3ds/mvc2/README.txt           short version of this guide
    ```
+   The release also has `mvc2.cia`, the same game as a HOME Menu app
+   (install it with FBI). The test programs and the profiler below are
+   built with the project (`build/port-3ds/sdcard/`), not released.
 
 3. **Add your disc image.** Put your disc image in that same `mvc2` folder.
    Any file name works:
@@ -106,9 +108,16 @@ controls, saves and disc access.
 | **ZL / ZR** | L2 / R2 | (as set in the game's options) |
 | START / SELECT | START / SELECT | |
 | **L + R + START + SELECT** | | Quit to the Homebrew Launcher |
+| **3D slider** | | Stereoscopic 3D (see below) |
 
 You can remap buttons in the game's own options menu. The move list always
 shows the default layout above.
+
+**Stereoscopic 3D.** Slide the 3D slider up and the stage's 3D geometry
+gets depth: it sits behind the screen, the fighters and their effects stay
+on the screen plane, and the slider sets how deep it goes. With the slider
+down, the game draws one picture as usual. With 3D on, the GPU draws every
+frame twice (once per eye), so very busy scenes can run a little slower.
 
 **Hold a button while the app starts** (troubleshooting only):
 
@@ -133,8 +142,22 @@ Touch controls:
 | --- | --- |
 | Name row, left or right half | Previous / next member of your team |
 | The list | Next page |
-| Bottom row, left | Frame skip on / off |
-| Bottom row, right | 4:3 or stretched picture |
+| The cog, bottom left | Settings: frame skip, 4:3 or widescreen, logging (off by default), characters (all unlocked or bought in the shop, each with its own save), **Check for updates** |
+
+Settings are kept in `settings.txt` in the app's folder. **Characters: Buy
+in the shop** gives the PS2's own progression, but a save that was made with
+everything unlocked stays unlocked: delete `/3ds/mvc2/mvc2_memcard/` to
+start progression from scratch. **Logging** is off by default; the game's
+log (`mvc2_log.txt`, with the timing lines below) is only written with it on.
+
+**Check for updates** asks GitHub for the newest release (Wi-Fi needed),
+and when there is a newer one, a second tap downloads its zip and writes
+the files of its `3ds/mvc2/` folder over the ones on the SD card. When the
+game runs as the CIA, or the CIA is installed, it installs the release's
+`mvc2.cia` too, so the HOME Menu app stays on the same version. The disc
+image, saves and logs are left alone; quit and start the game again to use
+the new version. The connection is checked against `cacert.pem` in the
+app's folder.
 
 The list comes from `movelist.txt` in the app folder, a plain text file
 you can edit. The format is described at the top of the file.
@@ -152,29 +175,62 @@ the previous one. If something goes wrong, that file says how far it got.
 | "Not the right disc" / immediate exit | It must be the **NTSC-U** disc `SLUS-20486`. PAL and Japanese discs have different code. |
 | No sound | Check that `sdmc:/3ds/dspfirm.cdc` exists (step 1). The log shows which CPU core the sound runs on. |
 | Runs slowly or crashes during start-up on an original 3DS | Not supported, see the top of this page. |
-| Graphics look wrong | Run **MvC2 renderer test** (`mvc2_rtest.3dsx`). It needs no disc, checks the GPU output itself and writes `mvc2_rtest_log.txt`. |
+| Graphics look wrong | Send a photo and the log. Developers: the renderer self-test (`mvc2_rtest.3dsx`, built with the project) checks the GPU output without a disc. |
 | Console crashes (Luma exception screen) | Luma saves a dump to `sdmc:/luma/dumps/arm11/`. Open an issue with that `.dmp` file and `mvc2_log.txt`. |
+| Slow in some scene | The log's `time:` and `steps:` lines (every second) say where the frame time went. For a closer look, run **MvC2 profiler** (`mvc2_prof.3dsx`, below). |
+
+### The timing lines in the log
+
+Every second the game logs, besides the frame rate, where each frame's time
+went (milliseconds per frame). The layout (these numbers are only an
+illustration, not a measurement):
+
+```
+f  4380 st 020102 59.8fps (game 59.8/s, 0 skipped) logic 9.1/11.0ms gpu 8.2ms ...
+  time: vblank 4.1 logic 9.1 (mesh 1.2 char 0.8 tex 0.0 sndlock 0.05) gpuwait 0.3 submit 0.9 ui 0.0 end 0.2, longest frame 18.1 | ...
+  steps: game update 5.3 render pass 1 2.1 render pass 2 0.9 sound tick 0.4 ...
+```
+
+- `logic`: the game's code, including recording its draws (`mesh`, `char`
+  and `tex` are parts of it); `steps:` splits it by the game's own steps.
+- `gpuwait`: waiting for the GPU to finish the previous frame (high means
+  the GPU is the bottleneck).
+- `vblank`: time to spare, waiting for the next screen refresh.
+- `submit`: sending the recorded frame to the GPU (per eye with 3D on).
+
+### The profiler build (`mvc2_prof.3dsx`)
+
+The same game with every function of the game, host and renderer code
+instrumented: a second CPU core samples which function is running about
+2000 times a second, and every 30 seconds the log lists the functions with
+the most time spent in them ("self") and under them ("inclusive"), by
+address. It runs somewhat slower than the normal build. To name the
+addresses, use the `mvc2_prof.elf` of the same build:
+
+```bash
+python3 port/tools/prof_symbolize.py build/port-3ds/mvc2_prof.elf mvc2_log.txt
+```
 
 ---
 
-## Known issues in v0.1
+## Known issues in v0.2
 
-This is a first release. It plays full fights, but expect rough edges:
-
-- **Speed.** Busy fights with three characters, assists and hyper effects
-  can need more than one frame of CPU time. Frame skip (on by default)
-  keeps the game's speed right by skipping drawing, so the picture can
-  look less smooth in those moments. Turn it off from the bottom screen to
-  see every frame at a lower speed.
-- **3D models are transformed on the CPU.** The 3DS GPU's vertex-shader
-  path for the game's 3D stages hung the console in testing, so models
-  are transformed on the CPU and drawn through the 2D path. This is
-  slower, and textured 3D models are drawn without fog.
-- **Hardware testing is limited.** The latest fixes (start-up crash fix,
-  bottom-screen blending, sound on a separate CPU core) have had less
-  testing on real hardware than the rest.
-- **Not yet done:** stereoscopic 3D, Old 3DS support, CIA (home menu)
-  install, button remapping for the move list.
+- **Speed.** Fights run at or near 60 fps; the busiest moments (several
+  hyper combos and assists at once) can still dip into the 50s. Frame skip
+  (on by default) keeps the game's speed right then by skipping drawing.
+- **3D models are transformed on the CPU** (on the New 3DS's second core).
+  The GPU's vertex-shader path for the stages hung the console in testing.
+  Textured 3D models are drawn without fog.
+- **The picture is drawn at 480x360** (three quarters of the PS2's
+  640x480) and stage textures use 16 bits where that loses nothing visible,
+  to keep the GPU within the frame time. That is still finer than the top
+  screen's picture.
+- **Stereoscopic 3D is a first version.** The depth comes from the stage's
+  3D geometry; 2D stage layers drawn before the fighters follow it, the
+  rest stays on the screen plane.
+- **Characters: Buy in the shop** has its own save (`mvc2_memcard/`); a
+  change of that setting applies at the next start.
+- **Not yet done:** Old 3DS support, button remapping for the move list.
 
 ---
 
@@ -193,7 +249,7 @@ on macOS or Linux. On Windows, use WSL or MSYS2.
 | **Python 3** | The port's code generators | Usually already installed |
 | **Emscripten** | Only for a build step that scans the decompiled code's function signatures. It runs a WebAssembly compile, never a 3DS one. | macOS: `brew install emscripten` · or an [emsdk](https://emscripten.org/docs/getting_started/downloads.html) checkout with `EMSDK` set |
 
-The versions used for v0.1: devkitARM r68, libctru 2.7.1, citro3d 1.7.1,
+The versions used for v0.2: devkitARM r68, libctru 2.7.1, citro3d 1.7.1,
 citro2d 1.7.0, picasso 2.7.2, Homebrew clang 22.1, Emscripten 6.0, CMake 4.4,
 Ninja 1.13, Python 3.
 
@@ -292,8 +348,22 @@ main stack and a 40 MB linear (GPU-visible) heap.
   rewrite the web build uses, the 3DS sets the VFP control register to
   round-toward-zero + flush-to-zero + default-NaN (`FPSCR = 0x03C00000`),
   so every float operation rounds the PS2 way for free.
-- **Frame pacing:** a 60 Hz accumulator on the system tick runs up to 3
-  logic steps per displayed frame and skips the drawing for the extra ones.
+- **Frame pacing:** one logic step per refresh of the top screen
+  (59.83 Hz), in phase with it: when ahead, the loop waits for the refresh;
+  when a frame ran long, the next one runs the steps that are due (up to 3)
+  and draws only the last.
+- **CPU and GPU in parallel:** the renderer records each frame's draws
+  while the game's logic runs and hands them to the GPU afterwards
+  (below), so the GPU draws frame N while the CPU runs the logic of frame
+  N+1. Before, the two took turns.
+- **No whole-heap cache flush:** citro3d's `C3D_FrameEnd(0)` writes the
+  whole 40 MB GPU heap out of the CPU cache every frame. The app flushes
+  what it wrote (vertex ring, textures, character tile cells) and ends
+  frames with `GX_CMDLIST_FLUSH`; only a frame that redrew the bottom
+  screen (citro2d) does the full flush.
+- **Profiling:** zone timers (`port/render/3ds/r3ds_prof.h`) and the game's
+  own steps are timed every frame and logged every second; the profiler
+  build samples functions (`port/platform/3ds/prof_fn_3ds.c`).
 
 ### Graphics (`port/render/3ds/`)
 
@@ -311,9 +381,26 @@ renderer (`r_c3d.c`) implements the same interface on **citro3d**:
   pages that changed.
 - PICA textures are **Morton-tiled and stored bottom row first**. Getting
   that wrong was the "garbled graphics" stage of the port.
-- The GPU runs a frame behind the CPU, so buffers the game frees or
-  overwrites are kept (copy-on-write, deferred frees) until the GPU is done
-  with them.
+- **Draw records:** every draw becomes a record (render state + a range of
+  the frame's vertex ring). The app keeps them while the logic runs and
+  replays them after `C3D_FrameBegin`; the replay sets the vertex buffer
+  once and emits only the state that changed between records (texture,
+  combiner, blend, depth, scissor, uniforms), where it used to rebuild the
+  whole pipeline for every draw.
+- The GPU may still be drawing the previous frame while the logic writes
+  the next, so textures, palette expansions, character tile cells and
+  freed buffers that either frame uses are kept (copy-on-write, deferred
+  frees) for two frames.
+- **Stereoscopic 3D:** the records are replayed once per eye into the
+  same canvas, each eye presented to its own top-screen target (citro3d
+  shows a frame in 3D when the right eye was drawn). The 2D vertex shader
+  adds `clamp(a + b·z, lo, hi)` to each vertex's x: per eye `a`, `b` follow
+  from the depth range of the stage's meshes (smoothed over frames), so its
+  far end goes about 10 screen pixels deep at full slider and the nearest
+  part comes out by up to 3. Fighters (character tile pages), what is drawn
+  after them, clears and the present stay at zero.
+- Palette writes that don't change any colour keep the palette's version,
+  so they no longer flush the batch or rebuild expansions and tiles.
 - 3D models go through `gl_shim.c`, a small GL subset, and are transformed
   on the CPU. The PICA vertex shaders for the GPU path (`mesh.v.pica`)
   are included but not used yet (see Known issues).

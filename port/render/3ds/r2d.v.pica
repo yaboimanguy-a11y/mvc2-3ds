@@ -15,6 +15,7 @@
 .fvec rotx     ; clip x = rotx.x * ndc.x + rotx.y * ndc.y
 .fvec roty     ; clip y = roty.x * ndc.x + roty.y * ndc.y
 .fvec uvscale  ; texture coordinate scale (non power-of-two textures), (su, sv, 0, 0)
+.fvec stereo   ; stereoscopic 3D, per eye: ndc.x += clamp(a + b * z, lo, hi) with (a, b, lo, hi); 0 = none
 
 .constf consts(1.0, 0.5, -1.0, 0.003921569)
 .alias ONE    consts.xxxx
@@ -34,6 +35,13 @@
     ; ndc = pos.xy * scale.xy + scale.zw
     mul r0.xy, scale.xy, inpos.xy
     add r0.xy, scale.zw, r0.xy
+
+    ; stereo: the eye's horizontal shift for this depth (canvas draws only)
+    mul r4.x, stereo.y, inpos.z
+    add r4.x, stereo.x, r4.x
+    max r4.x, stereo.z, r4.x
+    min r4.x, stereo.w, r4.x
+    add r0.x, r0.x, r4.x
 
     ; rotated: r1.x = rotx . ndc, r1.y = roty . ndc
     mul r2.xy, rotx.xy, r0.xy

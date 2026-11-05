@@ -7,13 +7,14 @@
  * RGBA5551 pages (the bank palettes are ARGB1555, so nothing is lost).  This
  * is what the PS2 itself did (an LRU of decompressed tiles in 26 PSMT4 pages,
  * RENDER_PATH.md).  A palette change (hit flashes, super effects) makes new
- * cells; cells drawn in the current frame are never reused before the GPU
- * has drawn that frame.
+ * cells; cells drawn in a frame the GPU may still draw (this one, and with
+ * the app's deferred replay the one before) are never reused.
  * Bank layout and placement: port/docs/ASSET_FORMATS.md section 2, chars.py.
  */
 #include "../r_internal.h"
 #include "../decode.h"
 #include "r_c3d.h"
+#include "r3ds_prof.h"
 #include <3ds.h>
 #include <math.h>
 #include <stdio.h>
@@ -58,7 +59,8 @@ static struct {
     uint8_t morton[64];
     uint8_t scratch[CELL * CELL + 64];
     int misses;
-    uint8_t dirty[NPAGES];  /* written this frame: flushed once in r3ds_char_frame_finish */
+    uint32_t dirty_lo[NPAGES], dirty_hi[NPAGES]; /* bytes written this frame (lo < hi):
+                                                    flushed once in r3ds_char_frame_finish */
 } C;
 
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
@@ -100,7 +102,8 @@ static void unlink_cell(int i)
     c->valid = 0;
 }
 
-/* a cell not drawn this frame: invalid ones first, else the least recently used */
+/* a cell no frame in flight draws: invalid ones first, else the least
+ * recently used */
 static int take_cell(void)
 {
     uint32_t frame = r3ds_frame_number();
@@ -108,7 +111,7 @@ static int take_cell(void)
     for (int k = 0; k < NCELLS; k++) {
         int i = (C.hand + k) % NCELLS;
         Cell *c = &C.cell[i];
-        if (c->last == frame && c->last != 0) continue;
+        if (c->last != 0 && c->last + 1 >= frame) continue;
         if (!c->valid) { best = i; break; }
         if (frame - c->last > 120) { best = i; break; }
         if (best < 0 || c->last < C.cell[best].last) best = i;
@@ -186,7 +189,19 @@ static int cell_for(const FlCharBank *b, int ti, int row)
             uint32_t at = (((Y >> 3) * (PAGE >> 3) + (X >> 3)) << 6) | C.morton[((Y & 7) << 3) | (X & 7)];
             dst[at] = (x < w && y < h) ? lut[C.scratch[y * w + x] & 15] : 0;
         }
-    C.dirty[i / CELLS_PER_PAGE] = 1;
+    {
+        /* the cell's tiles: memory rows PAGE-1-(cy+h1-1) .. PAGE-1-cy, tile
+         * rows run the whole page width, so one byte range holds them all */
+        uint32_t ylo = (uint32_t)(PAGE - 1 - (cy + h1 - 1)), yhi = (uint32_t)(PAGE - 1 - cy);
+        uint32_t lo = (((ylo >> 3) * (PAGE >> 3) + ((uint32_t)cx >> 3)) << 6) * 2;
+        uint32_t hi = (((yhi >> 3) * (PAGE >> 3) + ((uint32_t)(cx + w1 - 1) >> 3) + 1) << 6) * 2;
+        int pg = i / CELLS_PER_PAGE;
+        if (C.dirty_lo[pg] >= C.dirty_hi[pg]) { C.dirty_lo[pg] = lo; C.dirty_hi[pg] = hi; }
+        else {
+            if (lo < C.dirty_lo[pg]) C.dirty_lo[pg] = lo;
+            if (hi > C.dirty_hi[pg]) C.dirty_hi[pg] = hi;
+        }
+    }
     Cell *c = &C.cell[i];
     c->bank = b->id;
     c->tile = ti;
@@ -330,6 +345,7 @@ int fl_char_draw(FlCharBank *b, int f, const float m[16], uint32_t argb, int pal
     const uint8_t *rec = frame_rec(b, f, &n);
     if (!rec) return 0;
     if (r_discarding()) return n; /* a logic step that is not drawn (frame skip): no tile work */
+    uint64_t t0 = RP_T();
     uint8_t col[4];
     {
         unsigned ch[4] = { (argb >> 16) & 0xFF, (argb >> 8) & 0xFF, argb & 0xFF, argb >> 24 };
@@ -376,6 +392,7 @@ int fl_char_draw(FlCharBank *b, int f, const float m[16], uint32_t argb, int pal
         o[3] = q[0]; o[4] = q[2]; o[5] = q[3];
         drawn++;
     }
+    RP_ADD(RP_CHAR, t0);
     return drawn;
 }
 
@@ -383,9 +400,10 @@ int fl_char_draw(FlCharBank *b, int f, const float m[16], uint32_t argb, int pal
 void r3ds_char_frame_finish(void)
 {
     for (int p = 0; p < NPAGES; p++)
-        if (C.dirty[p]) {
-            GSPGPU_FlushDataCache(C.page[p].data, C.page[p].size);
-            C.dirty[p] = 0;
+        if (C.dirty_lo[p] < C.dirty_hi[p]) {
+            uint32_t hi = C.dirty_hi[p] > C.page[p].size ? C.page[p].size : C.dirty_hi[p];
+            GSPGPU_FlushDataCache((uint8_t *)C.page[p].data + C.dirty_lo[p], hi - C.dirty_lo[p]);
+            C.dirty_lo[p] = C.dirty_hi[p] = 0;
         }
 }
 

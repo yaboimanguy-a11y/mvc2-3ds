@@ -55,8 +55,26 @@ static struct {
 
 /* ---- locking ---- */
 #ifdef __3DS__
+#include "../render/3ds/r3ds_prof.h"
 static RecursiveLock a3_lock;
-void audio_lock(void) { if (A.dev) RecursiveLock_Lock(&a3_lock); }
+/* the game thread's sound calls: a wait for the mixer (it holds the lock
+ * while it renders a chunk) is counted in the frame-time profile */
+void audio_lock(void)
+{
+    if (!A.dev) return;
+    if (RecursiveLock_TryLock(&a3_lock) != 0) {
+        /* the mixer holds it for one short chunk: spin a little before
+         * sleeping on it (a kernel wake-up costs more than the chunk) */
+        uint64_t t0 = svcGetSystemTick();
+        while (RecursiveLock_TryLock(&a3_lock) != 0) {
+            if (svcGetSystemTick() - t0 > SYSCLOCK_ARM11 / 5000) { /* 0.2 ms */
+                RecursiveLock_Lock(&a3_lock);
+                break;
+            }
+        }
+        r3ds_prof[RP_ALOCK] += svcGetSystemTick() - t0;
+    }
+}
 void audio_unlock(void) { if (A.dev) RecursiveLock_Unlock(&a3_lock); }
 #else
 void audio_lock(void) { if (A.dev) SDL_LockAudioDevice(A.dev); }
@@ -229,9 +247,12 @@ static void SDLCALL device_cb(void *ud, Uint8 *stream, int len)
  * own rate).  A mixer thread - on core 2 of a New 3DS, else core 1 - keeps
  * A3_NBUF wave buffers of A3_FRAMES queued: when the DSP finishes one
  * (ndspSetCallback -> event) it renders the next with audio_render() under
- * the engine lock, the same lock every padx_* / TSD call takes.  The game
- * thread never mixes.  Needs the DSP firmware (sdmc:/3ds/dspfirm.cdc). */
+ * the engine lock, the same lock every padx_* / TSD call takes, in chunks of
+ * A3_CHUNK frames with the lock released between them, so a sound call of
+ * the game thread waits for at most one chunk.  The game thread never
+ * mixes.  Needs the DSP firmware (sdmc:/3ds/dspfirm.cdc). */
 #define A3_FRAMES 512
+#define A3_CHUNK 16
 #define A3_NBUF 6
 static ndspWaveBuf a3_wbuf[A3_NBUF];
 static int16_t *a3_pcm;
@@ -244,9 +265,11 @@ static int a3_core;
 static void a3_fill(ndspWaveBuf *wb)
 {
     int16_t *d = (int16_t *)wb->data_pcm16;
-    RecursiveLock_Lock(&a3_lock);
-    audio_render(a3_mix, A3_FRAMES);
-    RecursiveLock_Unlock(&a3_lock);
+    for (int off = 0; off < A3_FRAMES; off += A3_CHUNK) {
+        RecursiveLock_Lock(&a3_lock);
+        audio_render(a3_mix + off * 2, A3_CHUNK);
+        RecursiveLock_Unlock(&a3_lock);
+    }
     for (int i = 0; i < A3_FRAMES * 2; i++) {
         float x = a3_mix[i] * 32767.0f;
         d[i] = (int16_t)(x > 32767.0f ? 32767 : x < -32768.0f ? -32768 : (int)x);

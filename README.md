@@ -1,11 +1,12 @@
 # Marvel vs. Capcom 2 — PS2 decompilation and native port
 
-> ## 🎮 Nintendo 3DS port — v0.1 (New Nintendo 3DS only)
+> ## 🎮 Nintendo 3DS port — v0.2 (New Nintendo 3DS only)
 >
 > This fork adds a native **New Nintendo 3DS** port: the game's decompiled
-> code compiled for the 3DS, with no emulator. It has a citro3d renderer,
-> sound on the New 3DS's extra CPU core, `.iso` / `.bin` + `.cue` disc
-> images, and a move list on the bottom screen.
+> code compiled for the 3DS, with no emulator. Fights run at or near
+> 60 fps, with sound, stereoscopic 3D, `.iso` / `.bin` + `.cue` disc
+> images, a move list and a settings menu on the bottom screen, an in-game
+> updater, and a CIA for the HOME Menu.
 >
 > **⚠️ It only works on the New 3DS, New 3DS XL and New 2DS XL.** The
 > original 3DS / 2DS models are too slow.
@@ -13,7 +14,7 @@
 > **No game files are included.** You need your own dump of the PS2 disc
 > (NTSC-U `SLUS-20486`).
 >
-> - **Download:** [Releases](../../releases) → `mvc2-3ds-v0.1.zip`
+> - **Download:** [Releases](../../releases) → `mvc2-3ds-v0.2.zip` (and `mvc2.cia` for the HOME Menu)
 > - **Setup, controls, building and how it works:** [port/docs/3DS.md](port/docs/3DS.md)
 >
 > Upstream project: [g-guthrie/mvc2-ps2-decomp](https://github.com/g-guthrie/mvc2-ps2-decomp).

@@ -27,6 +27,7 @@
 #include "../../host/host.h"
 #include "../../host/host_loop.h"
 #include "movelist_3ds.h"
+#include "update_3ds.h"
 
 #define MAX_ID 0x3B
 #define W 320.f
@@ -47,6 +48,10 @@ static int team[3], nteam, point = -1;
 static char status_line[64];
 static int st_skip = 1, st_stretch;
 static int dirty = 1, ui_ok;
+static int settings_open;            /* the settings screen instead of the list */
+static int upd_state;                /* UPD_* of update_3ds.h */
+static int st_logging, st_unlock = 1, st_unlock_active = 1;
+static char upd_line[96];
 static C3D_RenderTarget *bottom;
 static C2D_TextBuf tbuf;
 static int page_first[64];   /* first move of each page */
@@ -363,18 +368,70 @@ static void draw_header(const char *title, int with_team)
     }
 }
 
+/* a cog: teeth round a disc with a hole */
+static void draw_gear(float cx, float cy, float r, u32 col, u32 hole)
+{
+    for (int i = 0; i < 8; i++) {
+        float a = (float)i * 0.785398f;
+        C2D_DrawCircleSolid(cx + cosf(a) * r * 0.86f, cy + sinf(a) * r * 0.86f, Z, r * 0.27f, col);
+    }
+    C2D_DrawCircleSolid(cx, cy, Z, r * 0.78f, col);
+    C2D_DrawCircleSolid(cx, cy, Z, r * 0.32f, hole);
+}
+
+#define GEAR_W 40.f   /* the settings button: the footer's left end */
+
 static void draw_footer(void)
 {
-    C2D_DrawRectSolid(0, FOOT_Y, Z, W, 240 - FOOT_Y, RGB(14, 10, 26));
+    u32 bar = RGB(14, 10, 26);
+    C2D_DrawRectSolid(0, FOOT_Y, Z, W, 240 - FOOT_Y, bar);
     C2D_DrawRectSolid(0, FOOT_Y, Z, W, 1, RGBA(255, 255, 255, 40));
-    u32 on = RGB(60, 150, 90), off = RGB(90, 90, 110);
-    const char *sk = st_skip ? "Frame skip ON" : "Frame skip OFF";
-    C2D_DrawRectSolid(6, FOOT_Y + 5, Z, 84, 17, st_skip ? on : off);
-    text(sk, 48 - text_w(sk, 0.40f) / 2, FOOT_Y + 6, 0.40f, c_white, 0);
-    const char *asp = st_stretch ? "Picture: wide" : "Picture: 4:3";
-    C2D_DrawRectSolid(W - 90, FOOT_Y + 5, Z, 84, 17, RGB(70, 80, 140));
-    text(asp, W - 48 - text_w(asp, 0.40f) / 2, FOOT_Y + 6, 0.40f, c_white, 0);
-    if (status_line[0]) text(status_line, W / 2 - text_w(status_line, 0.36f) / 2, FOOT_Y + 8, 0.36f, c_dim, 0);
+    C2D_DrawRectSolid(4, FOOT_Y + 3, Z, GEAR_W - 8, 240 - FOOT_Y - 6, settings_open ? RGB(120, 36, 160) : RGB(46, 44, 72));
+    draw_gear(GEAR_W / 2, FOOT_Y + 13, 8.f, c_white, settings_open ? RGB(120, 36, 160) : RGB(46, 44, 72));
+    const char *hint = settings_open ? "tap the cog to go back" : "settings";
+    text(hint, GEAR_W + 2, FOOT_Y + 8, 0.36f, c_dim, 0);
+    if (status_line[0]) text(status_line, W - 8, FOOT_Y + 8, 0.40f, c_white, 1);
+}
+
+/* ---------------- settings screen ---------------- */
+#define SET_Y0 (HEAD_H + 6.f)
+#define SET_ROW 31.f
+#define SET_H 27.f
+enum { SET_SKIP, SET_PICTURE, SET_LOG, SET_UNLOCK, SET_UPDATE, SET_N };
+
+static void set_row(int i, const char *label, const char *value, u32 vcol)
+{
+    float y = SET_Y0 + i * SET_ROW;
+    C2D_DrawRectSolid(8, y, Z, W - 16, SET_H, RGBA(255, 255, 255, 22));
+    text(label, 18, y + 4, 0.48f, c_white, 0);
+    if (value) {
+        float vw = text_w(value, 0.44f) + 16;
+        C2D_DrawRectSolid(W - 16 - vw, y + 3, Z, vw, SET_H - 6, vcol);
+        text(value, W - 16 - vw / 2 - text_w(value, 0.44f) / 2, y + 4, 0.44f, c_white, 0);
+    }
+}
+
+static void draw_settings(void)
+{
+    draw_header("Settings", 0);
+    {
+        char v[24];
+        snprintf(v, sizeof v, "v%s", update_version());
+        text(v, W - 10, 9.f, 0.46f, c_white, 1);
+    }
+    u32 on = RGB(60, 150, 90), off = RGB(90, 90, 110), blue = RGB(70, 80, 140);
+    set_row(SET_SKIP, "Frame skip", st_skip ? "ON" : "OFF", st_skip ? on : off);
+    set_row(SET_PICTURE, "Picture", st_stretch ? "Widescreen" : "4:3", blue);
+    set_row(SET_LOG, "Logging (mvc2_log.txt)", st_logging ? "ON" : "OFF", st_logging ? on : off);
+    set_row(SET_UNLOCK, "Characters", st_unlock ? "All unlocked" : "Buy in the shop", blue);
+    const char *ub = upd_state == UPD_AVAILABLE ? "Install" : upd_state == UPD_BUSY ? "Wait..." : "Check";
+    set_row(SET_UPDATE, "Check for updates", ub, upd_state == UPD_AVAILABLE ? c_btn_a : blue);
+    float y = SET_Y0 + SET_N * SET_ROW;
+    const char *l = upd_line[0] ? upd_line : "Updates: the newest release from GitHub (needs Wi-Fi)";
+    if (st_unlock != st_unlock_active && !upd_line[0])
+        l = "Characters: restart the game to switch (each mode has its own save)";
+    u32 lc = upd_state == UPD_ERROR ? c_btn_a : upd_state == UPD_DONE || upd_state == UPD_AVAILABLE ? c_gold : c_dim;
+    text(l, 14, y + 1, 0.38f, lc, 0);
 }
 
 static void draw_moves(const Entry *e)
@@ -466,9 +523,9 @@ int movelist_ui_init(void)
     return 0;
 }
 
-void movelist_render(void)
+int movelist_render(void)
 {
-    if (!ui_ok || !dirty) return;
+    if (!ui_ok || !dirty) return 0;
     dirty = 0;
     C2D_TextBufClear(tbuf);
     C2D_Prepare();
@@ -483,10 +540,12 @@ void movelist_render(void)
     C2D_TargetClear(bottom, c_bg1);
     C2D_SceneBegin(bottom);
     C2D_DrawRectangle(0, 0, 0.1f, W, 240, c_bg0, c_bg0, c_bg1, c_bg1);
-    if (shown >= 0) draw_moves(&tab[shown]);
+    if (settings_open) draw_settings();
+    else if (shown >= 0) draw_moves(&tab[shown]);
     else draw_help();
     draw_footer();
     C2D_Flush();
+    return 1;
 }
 
 static void show(int id)
@@ -523,10 +582,41 @@ void movelist_status(const char *s, int frame_skip, int stretch)
     dirty = 1;
 }
 
+void movelist_settings(int logging, int unlock_all, int unlock_active)
+{
+    st_unlock_active = unlock_active;
+    st_logging = logging;
+    st_unlock = unlock_all;
+    dirty = 1;
+}
+
+void movelist_update_status(int state, const char *line)
+{
+    upd_state = state;
+    snprintf(upd_line, sizeof upd_line, "%s", line ? line : "");
+    if (settings_open) dirty = 1;
+}
+
 int movelist_touch(int x, int y)
 {
-    if (y >= FOOT_Y)
-        return x < 160 ? MOVELIST_TOGGLE_SKIP : MOVELIST_TOGGLE_ASPECT;
+    if (y >= FOOT_Y) {
+        if (x < GEAR_W + 60) {
+            settings_open = !settings_open;
+            dirty = 1;
+        }
+        return 0;
+    }
+    if (settings_open) {
+        int i = (int)((y - SET_Y0) / SET_ROW);
+        if (y < SET_Y0 || i >= SET_N || y > SET_Y0 + i * SET_ROW + SET_H) return 0;
+        dirty = 1;
+        if (i == SET_SKIP) return MOVELIST_TOGGLE_SKIP;
+        if (i == SET_PICTURE) return MOVELIST_TOGGLE_ASPECT;
+        if (i == SET_LOG) return MOVELIST_TOGGLE_LOG;
+        if (i == SET_UNLOCK) return MOVELIST_TOGGLE_UNLOCK;
+        if (upd_state == UPD_BUSY) return 0;
+        return upd_state == UPD_AVAILABLE ? MOVELIST_UPDATE_INSTALL : MOVELIST_UPDATE_CHECK;
+    }
     if (!loaded) return 0;
     if (y < HEAD_H) {
         if (nteam > 0) {

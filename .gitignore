@@ -12,3 +12,6 @@ __pycache__/
 .venv/
 /config/SLUS_204.86.d
 /build-inputs/*.tar.gz
+
+# the CIA banner logo is a local file (not distributed): port/platform/3ds/cia/logo.png
+/port/platform/3ds/cia/logo.png

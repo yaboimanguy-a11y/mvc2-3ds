@@ -136,7 +136,7 @@ void sys3ds_log_console(int on)
 
 void sys3ds_con_print(const char *s)
 {
-    if (console_out && log_file) {
+    if (console_out) {
         console_out->write_r(_REENT, NULL, s, strlen(s));
     } else {
         fputs(s, stdout);
@@ -144,20 +144,40 @@ void sys3ds_con_print(const char *s)
     }
 }
 
-int sys3ds_log_open(const char *dir)
+/* stdout / stderr through the tee (console + the log file when open) */
+void sys3ds_log_tee(void)
 {
+    if (console_out) return;
+    console_out = devoptab_list[STD_OUT];
+    tee_out = *console_out;
+    tee_out.write_r = tee_write;
+    devoptab_list[STD_OUT] = &tee_out;
+    devoptab_list[STD_ERR] = &tee_out;
+}
+
+/* the log file on (a new mvc2_log.txt) or off; 0 = done */
+int sys3ds_log_file(const char *dir, int on)
+{
+    fflush(stdout);
+    fflush(stderr);
+    if (!on) {
+        if (log_file) { fclose(log_file); log_file = NULL; }
+        return 0;
+    }
+    if (log_file) return 0;
     char path[300];
     snprintf(path, sizeof path, "%s/mvc2_log.txt", dir);
     log_file = fopen(path, "w");
     if (!log_file)
         return -1;
     setvbuf(log_file, NULL, _IOFBF, 16 * 1024);
-    console_out = devoptab_list[STD_OUT];
-    tee_out = *console_out;
-    tee_out.write_r = tee_write;
-    devoptab_list[STD_OUT] = &tee_out;
-    devoptab_list[STD_ERR] = &tee_out;
     return 0;
+}
+
+int sys3ds_log_open(const char *dir)
+{
+    sys3ds_log_tee();
+    return sys3ds_log_file(dir, 1);
 }
 
 void sys3ds_log_flush(void)
@@ -171,12 +191,15 @@ void sys3ds_log_flush(void)
 void sys3ds_log_close(void)
 {
     sys3ds_log_flush();
-    if (!log_file)
-        return;
-    devoptab_list[STD_OUT] = console_out;
-    devoptab_list[STD_ERR] = console_out;
-    fclose(log_file);
-    log_file = NULL;
+    if (console_out) {
+        devoptab_list[STD_OUT] = console_out;
+        devoptab_list[STD_ERR] = console_out;
+        console_out = NULL;
+    }
+    if (log_file) {
+        fclose(log_file);
+        log_file = NULL;
+    }
 }
 
 /* ---- boot step timing ---------------------------------------------------

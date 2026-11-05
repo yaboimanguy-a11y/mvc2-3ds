@@ -224,42 +224,10 @@ static void run_phase(int phase, const char *what, int frames, int meshes)
     out("phase %d done (the GPU finished it)\n", phase);
 }
 
-int main(int argc, char **argv)
+/* the pixel checks of the canvas and of one top frame buffer (the scene of
+ * draw_scene after a phase) */
+static void run_checks(gfx3dSide_t side)
 {
-    char path[300] = "sdmc:/3ds/mvc2/mvc2_rtest_log.txt";
-    if (argc > 0 && argv[0] && !strncmp(argv[0], "sdmc:/", 6)) {
-        const char *slash = strrchr(argv[0], '/');
-        if (slash && slash - argv[0] < 200)
-            snprintf(path, sizeof path, "%.*s/mvc2_rtest_log.txt", (int)(slash - argv[0]), argv[0]);
-    }
-    gfxInitDefault();
-    gfxSetDoubleBuffering(GFX_TOP, false);  /* read back the one top frame buffer */
-    consoleInit(GFX_BOTTOM, NULL);
-    test_log = fopen(path, "w");
-    out("MvC2 3DS renderer self-test\n");
-    for (int y = 0; y < 8; y++)
-        for (int x = 0; x < 8; x++)
-            mort[y * 8 + x] = (uint8_t)((x & 1) | ((y & 1) << 1) | ((x & 2) << 1) | ((y & 2) << 2) | ((x & 4) << 2) | ((y & 4) << 3));
-
-    if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE * 4) || r_init() != 0) {
-        out("FAIL init (citro3d / r_init)\n");
-        goto done;
-    }
-    fl_set_flip_clear(1);
-    fl_set_display(640, 448);
-    make_textures();
-    make_meshes();
-
-    /* phases, the log saved every frame: if the console hangs, the last
-     * line says in which phase.  1: 2D only.  2: + meshes on the CPU path
-     * (what the game uses) - the pixel checks run after it.  Then, after
-     * the checks, the GPU mesh shader paths that hung the game, safest
-     * first, to find which part hangs: 3 without its fog output, 4 the
-     * full shader, 5 the full shader with indexed draws. */
-    run_phase(1, "2D only", 10, 0);
-    r3ds_set_mesh_mode(R3DS_MESH_CPU);
-    run_phase(2, "2D + meshes, CPU vertex path (the game's)", 30, 1);
-
     {
         /* 1. canvas layout: where does canvas (x, y) land in the texture? */
         C3D_Tex *cv = r3ds_canvas_tex();
@@ -308,8 +276,8 @@ int main(int argc, char **argv)
 
         /* 2. the top screen: (x, y) landscape, y down, BGR8, x * 240 + (239 - y) */
         u16 fw, fh;
-        u8 *fb = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, &fw, &fh);
-        out("  top frame buffer %ux%u\n", fw, fh);
+        u8 *fb = gfxGetFramebuffer(GFX_TOP, side, &fw, &fh);
+        out("  top frame buffer (%s eye) %ux%u\n", side == GFX_RIGHT ? "right" : "left", fw, fh);
 #define TOP(x, y, R, G, B, what) do { \
             const u8 *p_ = fb + ((size_t)(x) * 240 + (239 - (y))) * 3; \
             check(what, near_rgb(p_[2], p_[1], p_[0], R, G, B), p_[2], p_[1], p_[0]); } while (0)
@@ -326,6 +294,76 @@ int main(int argc, char **argv)
             out("  screen (60,20)=%d %d %d  mirrored (339,219)=%d %d %d\n", p[2], p[1], p[0], q[2], q[1], q[0]);
         }
     }
+}
+
+/* frames in the app's order: draws recorded first, replayed after
+ * C3D_FrameBegin (r3ds_frame_submit), the CPU mesh path */
+static void run_phase_deferred(int phase, const char *what, int frames, float slider)
+{
+    out("phase %d: %s, %d frames ...\n", phase, what, frames);
+    r3ds_set_mesh_mode(R3DS_MESH_CPU);
+    r3ds_set_deferred(1);
+    for (int f = 0; f < frames && aptMainLoop(); f++) {
+        r3ds_frame_start();
+        draw_scene(1);
+        r3ds_present();
+        C3D_FrameBegin(0);
+        r3ds_frame_submit(slider);
+        C3D_FrameEnd(GX_CMDLIST_FLUSH);
+        gspWaitForVBlank();
+        if (test_log) fflush(test_log);
+    }
+    r3ds_set_deferred(0);
+    C3D_FrameSync();
+    for (int i = 0; i < 6; i++) gspWaitForVBlank();
+    out("phase %d done (the GPU finished it)\n", phase);
+}
+
+int main(int argc, char **argv)
+{
+    char path[300] = "sdmc:/3ds/mvc2/mvc2_rtest_log.txt";
+    if (argc > 0 && argv[0] && !strncmp(argv[0], "sdmc:/", 6)) {
+        const char *slash = strrchr(argv[0], '/');
+        if (slash && slash - argv[0] < 200)
+            snprintf(path, sizeof path, "%.*s/mvc2_rtest_log.txt", (int)(slash - argv[0]), argv[0]);
+    }
+    gfxInitDefault();
+    gfxSet3D(true);                         /* right-eye frame buffer for phase 7 */
+    gfxSetDoubleBuffering(GFX_TOP, false);  /* read back the one top frame buffer */
+    consoleInit(GFX_BOTTOM, NULL);
+    test_log = fopen(path, "w");
+    out("MvC2 3DS renderer self-test\n");
+    for (int y = 0; y < 8; y++)
+        for (int x = 0; x < 8; x++)
+            mort[y * 8 + x] = (uint8_t)((x & 1) | ((y & 1) << 1) | ((x & 2) << 1) | ((y & 2) << 2) | ((x & 4) << 2) | ((y & 4) << 3));
+
+    if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE * 4) || r_init() != 0) {
+        out("FAIL init (citro3d / r_init)\n");
+        goto done;
+    }
+    fl_set_flip_clear(1);
+    fl_set_display(640, 448);
+    make_textures();
+    make_meshes();
+
+    /* phases, the log saved every frame: if the console hangs, the last
+     * line says in which phase.  1: 2D only.  2: + meshes on the CPU path
+     * (what the game uses) - the pixel checks run after it.  Then, after
+     * the checks, the GPU mesh shader paths that hung the game, safest
+     * first, to find which part hangs: 3 without its fog output, 4 the
+     * full shader, 5 the full shader with indexed draws. */
+    run_phase(1, "2D only", 10, 0);
+    r3ds_set_mesh_mode(R3DS_MESH_CPU);
+    run_phase(2, "2D + meshes, CPU vertex path (the game's)", 30, 1);
+
+    run_checks(GFX_LEFT);
+    /* the app's deferred replay (records kept during the logic, replayed
+     * after C3D_FrameBegin), mono and then both eyes (stereoscopic 3D) */
+    run_phase_deferred(6, "deferred replay (the app's frame order)", 30, 0.f);
+    run_checks(GFX_LEFT);
+    run_phase_deferred(7, "deferred replay, both eyes (3D slider up)", 30, 1.f);
+    run_checks(GFX_LEFT);
+    run_checks(GFX_RIGHT);
     out("\n%d passed, %d failed so far.\n", passes, fails);
     out("\nGPU mesh shader bisection (a hang here ends the test; the last line says where):\n");
     r3ds_set_mesh_mode(R3DS_MESH_GPU_NOFOG);

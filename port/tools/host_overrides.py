@@ -10,6 +10,16 @@ OVERRIDES = {
     # entry block jumps; this jump is behind a test, so it is forwarded here.
     # ARM put the jump address in r0 (= a): a[4]++ wrote into code (3DS data
     # abort mid fight).
+    # func_00185640 (a throw / grab start: a takes hold of b) calls the
+    # attacker's action callback +0x28 with (a) only, but the callbacks in
+    # that slot (func_002E3920, src/q3_l.c) take (p, q) and turn q, the one
+    # held, to face p.  On the EE $a1 still held b there; on ARM r1 held
+    # whatever, and the write to q+0x140 went into code (3DS data abort
+    # mid fight, crash_dump_00000002).  The host passes b explicitly.
+    "src/q6_x.c": [
+        ("(*(void (**)(u8 *))(*(u8 **)(a + 0x43C) + 0x28))(a);",
+         "(*(void (**)(u8 *, u8 *))(*(u8 **)(a + 0x43C) + 0x28))(a, b); /* host R10: $a1 = b on the EE */"),
+    ],
     "src/wave13b.c": [
         ("else ((void (*)(void))D_004C1B60[a[5]])();",
          "else ((void (*)(u8 *, u8 *))D_004C1B60[a[5]])(a, b); /* host R10: tail forward */"),

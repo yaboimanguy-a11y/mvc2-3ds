@@ -5,11 +5,23 @@
 #include <stdint.h>
 #include <citro3d.h>
 
-/* frame: between C3D_FrameBegin(C3D_FRAME_SYNCDRAW) and C3D_FrameEnd */
-void r3ds_frame_start(void);   /* after C3D_FrameBegin: frees last frame's garbage, clears the top screen */
+/* A frame, immediate (default: the self-test):
+ *   C3D_FrameBegin, r3ds_frame_start, draws, r3ds_present, r3ds_frame_finish, C3D_FrameEnd
+ * deferred (the app): the draws are recorded while the logic runs, and
+ * replayed once the GPU is free, so the logic overlaps the GPU's last frame:
+ *   r3ds_frame_start, draws, r3ds_present, C3D_FrameBegin, r3ds_frame_submit,
+ *   (other citro3d work), C3D_FrameEnd */
+void r3ds_set_deferred(int on);
+void r3ds_frame_start(void);   /* frees the garbage of frames done, starts recording (immediate: clears the top screen) */
 void r3ds_present(void);       /* the canvas (fl_get_display part) -> top screen */
-void r3ds_frame_finish(void);  /* before C3D_FrameEnd: flushes batches and the vertex cache */
+void r3ds_frame_finish(void);  /* immediate, before C3D_FrameEnd: flushes batches and the vertex cache */
+/* deferred, after C3D_FrameBegin: flushes, then replays the frame into
+ * citro3d, once per eye when slider > 0 (stereoscopic 3D, osGet3DSliderState) */
+void r3ds_frame_submit(float slider);
 uint32_t r3ds_frame_number(void);
+int r3ds_frame_records(void);  /* draw records of the frame being built */
+/* stereo: the smoothed depth range of the stage (0 when none) and the eyes drawn last frame */
+void r3ds_stereo_info(float *zfar, float *znear, int *eyes);
 
 enum { R3DS_PRESENT_43 = 0, R3DS_PRESENT_STRETCH = 1 };
 void r3ds_set_present_mode(int mode);

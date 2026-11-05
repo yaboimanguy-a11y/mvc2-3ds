@@ -19,7 +19,8 @@ NEW Nintendo 3DS / New 3DS XL / New 2DS XL ONLY (the original 3DS and
        /3ds/mvc2/Marvel vs. Capcom 2 (USA).bin
        /3ds/mvc2/Marvel vs. Capcom 2 (USA).cue
 
-3. Start a program from the Homebrew Launcher:
+3. Start the game from the Homebrew Launcher (or install mvc2.cia with FBI
+   and start it from the HOME Menu):
 
    "Marvel vs. Capcom 2" (mvc2.3dsx)
        The game on the top screen, with sound.  Sound needs the 3DS DSP
@@ -35,20 +36,26 @@ NEW Nintendo 3DS / New 3DS XL / New 2DS XL ONLY (the original 3DS and
        movelist.txt in this folder: edit it freely.
          touch the name row (left / right): through your team
          touch the list: next page
-         touch the bottom row: left = frame skip on/off, right = 4:3 / stretch
+         touch the cog (bottom left): settings - frame skip on/off,
+           4:3 or widescreen, logging (mvc2_log.txt, off by
+           default), characters (all unlocked, or bought in the shop as on
+           the PS2; each has its own save - mvc2_memcard_unlocked and
+           mvc2_memcard - and a change applies at the next start), and
+           "Check for updates", which downloads
+           the newest release from GitHub over Wi-Fi and installs it in
+           this folder, and the HOME Menu app too when mvc2.cia is
+           installed (your disc image and saves stay; restart after)
        Frame skip (on by default) keeps the game at full speed when the
        3DS can't draw every frame.
+       3D slider up: stereoscopic 3D (the stage sits behind the fighters).
+       The picture is drawn once per eye then, so busy scenes can run a
+       little slower with 3D on.
        L + R + START + SELECT: quit.
 
-   "MvC2 renderer test" (mvc2_rtest.3dsx)
-       Needs no disc. Draws a test picture, checks it, and writes the
-       result to mvc2_rtest_log.txt in this folder.
-
-   "MvC2 boot test" (mvc2_boottest.3dsx)
-       Runs the game's logic with no picture and measures its speed.
-       START stops it and prints a summary.
-
-The programs write mvc2_log.txt (game, boot test) and mvc2_rtest_log.txt
-(renderer test) in this folder, replaced on every run.
+With logging on (settings), the game writes mvc2_log.txt in this folder,
+replaced on every run: what happened, and every second the frame rate and
+where each frame's time went ("time:" and "steps:" lines).  If the game
+crashes, Luma3DS saves a dump in sdmc:/luma/dumps/arm11/; send it with the
+log.
 
 No game data is included. You supply the disc image.
