@@ -20,6 +20,18 @@ OVERRIDES = {
         ("(*(void (**)(u8 *))(*(u8 **)(a + 0x43C) + 0x28))(a);",
          "(*(void (**)(u8 *, u8 *))(*(u8 **)(a + 0x43C) + 0x28))(a, b); /* host R10: $a1 = b on the EE */"),
     ],
+    # func_001A1FC0 (an effect / clone node's update, run by the task list
+    # func_003DA6F0) jumps through D_0044AFF0 with (a0) only, but the entries
+    # func_001A2050 / func_001A20F0 take (p, q) and read q, the owner
+    # PTR(a0, 0x18): q + 0x2B8 and q[0x2F0], the same fields the dispatcher
+    # tests through its a1 / a2 just before the jump.  On the EE $a1 still
+    # held that owner; on ARM the tail call left the jump address in r1, so
+    # func_001A2200 -> func_00185960 wrote through code (3DS data abort mid
+    # fight, crash_dump_00000000 of 2026-11-05).  The host passes a1.
+    "src/n6.c": [
+        ("(*(void (**)(u8 *))(D_0044AFF0 + U8(a0, 4) * 4))(a0);",
+         "(*(void (**)(u8 *, u8 *))(D_0044AFF0 + U8(a0, 4) * 4))(a0, a1); /* host R10: $a1 = PTR(a0, 0x18) on the EE */"),
+    ],
     "src/wave13b.c": [
         ("else ((void (*)(void))D_004C1B60[a[5]])();",
          "else ((void (*)(u8 *, u8 *))D_004C1B60[a[5]])(a, b); /* host R10: tail forward */"),
