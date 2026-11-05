@@ -1,6 +1,9 @@
 Marvel vs. Capcom 2 (PS2 decomp) - Nintendo 3DS
 ================================================
 
+NEW Nintendo 3DS / New 3DS XL / New 2DS XL ONLY (the original 3DS and
+2DS are too slow).  Full guide: port/docs/3DS.md in the repository.
+
 1. Put your own disc image of the game in this folder. It must be a
    dump of the NTSC-U PS2 disc (SLUS-20486), in any of these forms
    (any file names):

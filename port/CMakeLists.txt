@@ -69,9 +69,34 @@ if(MVC2_HOST_SIGS STREQUAL "OFF")
 elseif(MVC2_HOST_SIGS STREQUAL "")
   set(_sigs "${CMAKE_BINARY_DIR}/host_sigs.json")
   file(GLOB _stub_srcs "${MVC2_ROOT}/port/stubs/*.c" "${MVC2_ROOT}/port/stubs/*.h")
+  # The scan compiles the sources with Emscripten's clang, found under
+  # $EMSDK (an emsdk checkout, default /home/user/emsdk).  With no EMSDK and
+  # a packaged Emscripten (Homebrew: <prefix>/libexec/{emcc,llvm/bin}), make
+  # an emsdk-shaped tree of symlinks in the build directory.
+  set(_sigs_env "")
+  if(NOT DEFINED ENV{EMSDK} AND NOT EXISTS "/home/user/emsdk/upstream/bin/clang")
+    find_program(MVC2_EMCC NAMES emcc)
+    if(MVC2_EMCC)
+      file(REAL_PATH "${MVC2_EMCC}" _emcc_real)
+      get_filename_component(_em_prefix "${_emcc_real}" DIRECTORY)
+      get_filename_component(_em_prefix "${_em_prefix}" DIRECTORY)
+      if(EXISTS "${_em_prefix}/libexec/llvm/bin/clang")
+        set(_shim "${CMAKE_BINARY_DIR}/emsdk-shim")
+        file(MAKE_DIRECTORY "${_shim}/upstream")
+        file(CREATE_LINK "${_em_prefix}/libexec/llvm/bin" "${_shim}/upstream/bin" SYMBOLIC)
+        file(CREATE_LINK "${_em_prefix}/libexec" "${_shim}/upstream/emscripten" SYMBOLIC)
+        set(_sigs_env "EMSDK=${_shim}")
+        message(STATUS "signature scan: Emscripten from ${_em_prefix}")
+      endif()
+    endif()
+    if(NOT _sigs_env)
+      message(WARNING "signature scan: no Emscripten found (set EMSDK, or install emscripten); "
+                      "or pass -DMVC2_HOST_SIGS=<host_sigs.json> from an earlier build")
+    endif()
+  endif()
   add_custom_command(
     OUTPUT "${_sigs}"
-    COMMAND ${CMAKE_COMMAND} -E env --unset=MVC2_HOST_SIGS
+    COMMAND ${CMAKE_COMMAND} -E env --unset=MVC2_HOST_SIGS ${_sigs_env}
             ${Python3_EXECUTABLE} "${MVC2_ROOT}/port/tools/gen_link_glue.py" sigs
             --out "${_sigs}" --raw-build "${CMAKE_BINARY_DIR}/sigs_raw"
     DEPENDS ${HOSTIFY_DEPS} ${_stub_srcs} "${MVC2_ROOT}/port/tools/host_sigs.py"

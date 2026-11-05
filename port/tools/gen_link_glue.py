@@ -57,8 +57,18 @@ import link_catalog as L  # noqa: E402
 
 ROOT = L.ROOT
 STUBS_DIR = ROOT / "port/stubs"
-NM = shutil.which("llvm-nm") or os.path.join(os.environ.get("EMSDK", "/home/user/emsdk"),
-                                             "upstream/bin/llvm-nm")
+def _find_nm():
+    """llvm-nm: $LLVM_NM, PATH, the emsdk's, or a Homebrew LLVM's."""
+    cands = [os.environ.get("LLVM_NM"), shutil.which("llvm-nm"),
+             os.path.join(os.environ.get("EMSDK", "/home/user/emsdk"), "upstream/bin/llvm-nm"),
+             "/opt/homebrew/opt/llvm/bin/llvm-nm", "/usr/local/opt/llvm/bin/llvm-nm"]
+    for c in cands:
+        if c and os.path.exists(c):
+            return c
+    return "llvm-nm"
+
+
+NM = _find_nm()
 # provided by the linker / the wasm runtime, never by game or glue code
 LINKER_SYMBOLS = {"_GLOBAL_OFFSET_TABLE_", "__indirect_function_table", "__stack_pointer",
                   "__memory_base", "__table_base", "__dso_handle"}
