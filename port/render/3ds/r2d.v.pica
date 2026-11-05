@@ -1,0 +1,59 @@
+; 2D vertex shader of the 3DS renderer (port/render/3ds/r_c3d.c).
+;
+; Input: RVtx (r_internal.h) as the loaders feed it:
+;   v0 = x, y, z, w   x/y in view pixels; z = NDC depth (-1 far .. 1 near,
+;                     r_depth_of); w = 1/q (perspective-correct ST)
+;   v1 = u, v         normalised texture coordinates
+;   v2 = r, g, b, a   bytes 0..255 (PICA loaders do not normalise)
+; Output: what the GL renderer's k_vs gives, mapped to the PICA conventions:
+;   clip x/y = rot(view pixels -> NDC) * w; rot is the identity for the
+;   canvas and the 90 degree turn of Mtx_OrthoTilt for the screens;
+;   clip z = -(window depth) * w with window depth = (z + 1) / 2, so the
+;   C3D_DepthMap(true, -1, 0) depth equals GL's and GEQUAL / clear 0 hold.
+
+.fvec scale    ; (2 / view_w, -2 / view_h, -1, 1): pixels -> NDC (y down -> up)
+.fvec rotx     ; clip x = rotx.x * ndc.x + rotx.y * ndc.y
+.fvec roty     ; clip y = roty.x * ndc.x + roty.y * ndc.y
+.fvec uvscale  ; texture coordinate scale (non power-of-two textures), (su, sv, 0, 0)
+
+.constf consts(1.0, 0.5, -1.0, 0.003921569)
+.alias ONE    consts.xxxx
+.alias HALF   consts.yyyy
+.alias NEGONE consts.zzzz
+.alias INV255 consts.wwww
+
+.out outpos position
+.out outtc0 texcoord0
+.out outclr color
+
+.alias inpos v0
+.alias intc  v1
+.alias inclr v2
+
+.proc main
+    ; ndc = pos.xy * scale.xy + scale.zw
+    mul r0.xy, scale.xy, inpos.xy
+    add r0.xy, scale.zw, r0.xy
+
+    ; rotated: r1.x = rotx . ndc, r1.y = roty . ndc
+    mul r2.xy, rotx.xy, r0.xy
+    add r1.x, r2.x, r2.y
+    mul r2.xy, roty.xy, r0.xy
+    add r1.y, r2.x, r2.y
+
+    ; clip x/y = r1 * w, clip w = w
+    mul outpos.xy, inpos.ww, r1.xy
+    mov outpos.w, inpos.w
+
+    ; clip z = -((z + 1) / 2) * w
+    add r3.x, ONE, inpos.z
+    mul r3.x, HALF, r3.x
+    mul r3.x, NEGONE, r3.x
+    mul outpos.z, inpos.w, r3.x
+
+    ; texcoords and colour
+    mul outtc0.xy, uvscale.xy, intc.xy
+    mov outtc0.zw, ONE
+    mul outclr, INV255, inclr
+    end
+.end

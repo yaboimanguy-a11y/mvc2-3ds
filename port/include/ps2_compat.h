@@ -56,6 +56,11 @@ void ps2_asm_stmt(const char *file, int line, const char *tmpl);
 #if defined(__wasm__)
 #define PS2_DATA_ALIAS(name, base, off, size) \
     __asm__(".weak " #name "\n.set " #name ", " #base "+" #off "\n");
+#elif defined(__arm__)
+/* ARM gas: '@' starts a comment, so the symbol type is spelled %object */
+#define PS2_DATA_ALIAS(name, base, off, size) \
+    __asm__(".weak " #name "\n.type " #name ",%object\n.set " #name ", " #base "+" #off \
+            "\n.size " #name ", " #size "\n");
 #else
 #define PS2_DATA_ALIAS(name, base, off, size) \
     __asm__(".weak " #name "\n.type " #name ",@object\n.set " #name ", " #base "+" #off \
@@ -79,8 +84,33 @@ void ps2_asm_stmt(const char *file, int line, const char *tmpl);
 /* `(T *)__builtin_next_arg(last) - K` (a pointer into the EE register save
  * area) becomes a host va_start; va_list is a plain pointer on i386 and
  * wasm32, and the game's vfprintf reads it with __builtin_va_arg. */
+/* A va_list parameter in a canonical signature (port/tools/host_sigs.py).
+ * i386/wasm32: a word, as the wasm signature says.  ARM: callers pass a
+ * va_list (a one-word struct), a pointer from PS2_VA_START_HERE, or a word;
+ * the transparent union takes each and passes it in one core register,
+ * which is how the callee's real va_list parameter arrives. */
+#if defined(__arm__)
+typedef union {
+    void *ptr;
+    int word;
+    __builtin_va_list va;
+    char *cptr;
+} __attribute__((transparent_union)) ps2_va_param;
+#define PS2_VA_LIST ps2_va_param
+#else
+#define PS2_VA_LIST int
+#endif
+
+#if defined(__arm__)
+/* AAPCS: va_list is struct { void *__ap; }; __ap walks the spilled argument
+ * words in order, and the one-word struct is passed exactly like a pointer,
+ * so the game's vfprintf (which takes a va_list) still reads it. */
+#define PS2_VA_START_HERE(last) \
+    ({ __builtin_va_list ps2_va_; __builtin_va_start(ps2_va_, last); ps2_va_.__ap; })
+#else
 #define PS2_VA_START_HERE(last) \
     ({ __builtin_va_list ps2_va_; __builtin_va_start(ps2_va_, last); (void *)ps2_va_; })
+#endif
 
 /* ---- Metrowerks / EE GCC extensions ---------------------------------- */
 /* EE GCC varargs save-area builtin (sdk_format_message_003f5540.c). */

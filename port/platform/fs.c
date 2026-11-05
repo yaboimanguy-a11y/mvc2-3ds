@@ -11,22 +11,41 @@
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 
 /* ---- sources ---- */
+/* reads that reached a file (calls, bytes): fs_read_stats() */
+static uint64_t stat_calls, stat_bytes;
+
+void fs_read_stats(uint64_t *calls, uint64_t *bytes)
+{
+    if (calls) *calls = stat_calls;
+    if (bytes) *bytes = stat_bytes;
+}
+
 static size_t file_read_at(void *ctx, uint64_t off, void *dst, size_t n)
 {
     FILE *f = (FILE *)ctx;
+    size_t got;
 #if defined(_WIN32)
     if (_fseeki64(f, (long long)off, SEEK_SET)) return 0;
 #else
     if (fseeko(f, (off_t)off, SEEK_SET)) return 0;
 #endif
-    return fread(dst, 1, n, f);
+    got = fread(dst, 1, n, f);
+    stat_calls++;
+    stat_bytes += got;
+    return got;
 }
 static void file_close(void *ctx) { fclose((FILE *)ctx); }
+
+/* stdio buffer of an image file: the small header/table reads come from it
+ * (newlib's default is 1 KB, which on the 3DS SD card means an access per
+ * KB); big reads bypass it */
+#define FILE_BUFFER (64u * 1024u)
 
 int fs_source_open_file(FsSource *src, const char *path)
 {
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
+    setvbuf(f, NULL, _IOFBF, FILE_BUFFER);
     fseeko(f, 0, SEEK_END);
     src->size = (uint64_t)ftello(f);
     src->ctx = f;
@@ -61,6 +80,170 @@ void fs_source_close(FsSource *src)
 {
     if (src->close) src->close(src->ctx);
     memset(src, 0, sizeof *src);
+}
+
+/* ---- raw CD images (.bin) ---- */
+/* A BIN stores whole 2352-byte CD sectors: 12 sync bytes, a 4-byte header,
+ * then the 2048 user bytes (MODE1), or an 8-byte subheader first (MODE2
+ * form 1, as on the PS2 CD-ROM).  MODE2/2336 dumps drop sync and header. */
+/* Raw sectors are read RAW_BATCH at a time into buf (one file access per
+ * run instead of one per 2048 bytes) and later reads of those sectors are
+ * served from it: the game reads files sequentially. */
+#define RAW_BATCH 32u
+typedef struct {
+    FsSource in;
+    uint32_t sect, off;
+    uint64_t nsect;                 /* whole raw sectors in the file */
+    uint64_t buf_lba;               /* first sector in buf */
+    uint32_t buf_n;                 /* sectors in buf (0 = empty) */
+    uint8_t *buf;                   /* RAW_BATCH * sect bytes */
+} RawSrc;
+
+/* user data of sector lba, or NULL past the end / on a read error */
+static const uint8_t *raw_sector(RawSrc *r, uint64_t lba)
+{
+    if (lba >= r->nsect) return NULL;
+    if (r->buf_n == 0 || lba < r->buf_lba || lba >= r->buf_lba + r->buf_n) {
+        uint64_t k = r->nsect - lba;
+        size_t want, got;
+        if (k > RAW_BATCH) k = RAW_BATCH;
+        want = (size_t)k * r->sect;
+        got = r->in.read_at(r->in.ctx, lba * r->sect, r->buf, want);
+        r->buf_lba = lba;
+        r->buf_n = (uint32_t)(got / r->sect);
+        if (r->buf_n == 0) return NULL;
+    }
+    return r->buf + (size_t)(lba - r->buf_lba) * r->sect + r->off;
+}
+
+static size_t raw_read_at(void *ctx, uint64_t off, void *dst, size_t n)
+{
+    RawSrc *r = (RawSrc *)ctx;
+    uint8_t *d = (uint8_t *)dst;
+    size_t done = 0;
+    while (done < n) {
+        uint64_t lba = (off + done) / SECTOR;
+        uint32_t in = (uint32_t)((off + done) % SECTOR);
+        size_t k = SECTOR - in;
+        const uint8_t *s = raw_sector(r, lba);
+        if (!s) break;
+        if (k > n - done) k = n - done;
+        memcpy(d + done, s + in, k);
+        done += k;
+    }
+    return done;
+}
+static void raw_close(void *ctx)
+{
+    RawSrc *r = (RawSrc *)ctx;
+    fs_source_close(&r->in);
+    free(r->buf);
+    free(r);
+}
+
+int fs_source_cooked(FsSource *src)
+{
+    /* sector size, user-data offset: plain ISO, MODE2/2352, MODE1/2352, MODE2/2336 */
+    static const uint32_t lay[][2] = { { SECTOR, 0 }, { 2352, 24 }, { 2352, 16 }, { 2336, 8 } };
+    uint8_t pvd[6];
+    for (unsigned i = 0; i < sizeof lay / sizeof lay[0]; i++) {
+        uint64_t at = 16ull * lay[i][0] + lay[i][1]; /* the primary volume descriptor */
+        if (src->read_at(src->ctx, at, pvd, 6) != 6 || pvd[0] != 1 || memcmp(pvd + 1, "CD001", 5))
+            continue;
+        if (i == 0) return 0;
+        RawSrc *r = (RawSrc *)calloc(1, sizeof *r);
+        if (!r) return -1;
+        r->buf = (uint8_t *)malloc((size_t)RAW_BATCH * lay[i][0]);
+        if (!r->buf) { free(r); return -1; }
+        r->in = *src;
+        r->sect = lay[i][0];
+        r->off = lay[i][1];
+        r->nsect = src->size / lay[i][0];
+        src->ctx = r;
+        src->read_at = raw_read_at;
+        src->close = raw_close;
+        src->size = r->in.size / r->sect * SECTOR;
+        return 0;
+    }
+    return -1;
+}
+
+static int ends_with_ci(const char *s, const char *suffix)
+{
+    size_t a = strlen(s), b = strlen(suffix);
+    if (a < b) return 0;
+    for (size_t i = 0; i < b; i++)
+        if (tolower((unsigned char)s[a - b + i]) != tolower((unsigned char)suffix[i])) return 0;
+    return 1;
+}
+
+/* The data track's file of a .cue: the first FILE line (the PS2 disc is a
+ * single MODE2/2352 track; a data track always comes first).  Relative names
+ * are next to the .cue.  0 = ok. */
+static int cue_bin_path(const char *cue, char *out, size_t n)
+{
+    FILE *f = fopen(cue, "r");
+    char line[512], name[384];
+    int found = 0;
+    if (!f) return -1;
+    while (!found && fgets(line, sizeof line, f)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (strncmp(p, "FILE", 4) || (p[4] != ' ' && p[4] != '\t')) continue;
+        p += 4;
+        while (*p == ' ' || *p == '\t') p++;
+        size_t k = 0;
+        if (*p == '"') {
+            for (p++; *p && *p != '"' && k + 1 < sizeof name; p++) name[k++] = *p;
+        } else {
+            for (; *p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n' && k + 1 < sizeof name; p++)
+                name[k++] = *p;
+        }
+        name[k] = 0;
+        found = k > 0;
+    }
+    fclose(f);
+    if (!found) return -1;
+    const char *slash = strrchr(cue, '/');
+    const char *bslash = strrchr(cue, '\\');
+    if (bslash && (!slash || bslash > slash)) slash = bslash;
+    if (name[0] == '/' || !slash)
+        return snprintf(out, n, "%s", name) < (int)n ? 0 : -1;
+    return snprintf(out, n, "%.*s/%s", (int)(slash - cue), cue, name) < (int)n ? 0 : -1;
+}
+
+int fs_source_open_disc(FsSource *src, const char *path)
+{
+    char bin[512];
+    if (ends_with_ci(path, ".cue")) {
+        /* The track file the .cue names; when that is missing (the files
+         * were renamed, e.g. to mvc2.cue + mvc2.bin), the .bin with the
+         * .cue's own name. */
+        int named = cue_bin_path(path, bin, sizeof bin) == 0 && fs_source_open_file(src, bin) == 0;
+        if (!named) {
+            size_t l = strlen(path);
+            static const char *ext[] = { ".bin", ".BIN", ".Bin" };
+            int ok = 0;
+            if (l >= sizeof bin) return -1;
+            for (unsigned i = 0; !ok && i < 3; i++) {
+                memcpy(bin, path, l - 4);
+                memcpy(bin + l - 4, ext[i], 5);
+                ok = fs_source_open_file(src, bin) == 0;
+            }
+            if (!ok) return -1;
+        }
+        if (fs_source_cooked(src)) {
+            fs_source_close(src);
+            return -1;
+        }
+        return 0;
+    }
+    if (fs_source_open_file(src, path)) return -1;
+    if (fs_source_cooked(src)) {
+        fs_source_close(src);
+        return -1;
+    }
+    return 0;
 }
 
 /* ---- ISO9660 ---- */
@@ -242,7 +425,7 @@ int disc_open_source(GameDisc *d, FsSource src)
 int disc_open(GameDisc *d, const char *iso_path)
 {
     FsSource s;
-    if (fs_source_open_file(&s, iso_path)) return -1;
+    if (fs_source_open_disc(&s, iso_path)) return -1;
     return disc_open_source(d, s);
 }
 

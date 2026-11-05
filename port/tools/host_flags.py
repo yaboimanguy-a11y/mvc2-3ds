@@ -11,6 +11,12 @@ TARGETS = {
     # PRIMARY target: the Emscripten toolchain's own clang (what emcc runs per
     # TU; calling it directly skips emcc's ~0.3 s python start-up per file).
     "emscripten": ["--target=wasm32-unknown-emscripten"],
+    # Nintendo 3DS (ARM11 MPCore, ARMv6K, VFPv2 hard-float; same ABI as
+    # devkitARM's 3ds_rules).  AAPCS already aligns long long/double to 8.
+    # -fno-short-enums: bare-metal ARM clang defaults to short enums, the EE
+    # ABI (and devkitARM/libctru) use int-sized enums.
+    "arm3ds": ["--target=armv6k-none-eabihf", "-mcpu=mpcore", "-mfloat-abi=hard",
+               "-mfpu=vfpv2", "-marm", "-fno-short-enums"],
 }
 
 EMSDK = os.environ.get("EMSDK", "/home/user/emsdk")

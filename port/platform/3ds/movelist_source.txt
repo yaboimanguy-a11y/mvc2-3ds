@@ -1,0 +1,607 @@
+# Raw extract of "Marvel vs. Capcom 2: New Age of Heroes move list",
+# Marvel vs. Capcom Wiki (Fandom), https://marvelvscapcom.fandom.com/wiki/Marvel_vs._Capcom_2:_New_Age_of_Heroes_move_list
+# Community content under CC BY-SA 3.0; input icons rendered as text.
+# port/tools/make_movelist.py turns this into movelist.txt (the 3DS app's bottom screen).
+## Akuma/Gouki
+Zugai Hasatsu | F + HP
+Senpuu Kyaku | F + HK
+Mae Geri | (air) U + LK , then LK
+Air Senpuu Kyaku | (air) U + HK
+Gohadoken | QCF + P
+Zanku Hadoken | (air) QCF + P
+Goshoryuken | DP + P
+Tatsumaki Zankukyaku | (air ok) QCB + K
+Tenma Kujinkyaku | (air) QCF + K
+Ashura Senku | RDP or DP + K K or P P
+Messatsu Gohado | QCB + P P
+Tenma Gozanku | (air) QCF + P P
+Messatsu Goshoryu | QCF + P P
+Messatsu Gorasen | QCF + K K
+Shun Goku Satsu (Level 3) | LP LP F LK HP
+## Amingo
+Shout of Wind | (air ok) QCF + P
+Joy of Green | QCB + P
+Child of the Ground | QCF + K
+Child of the Ground (Capture) | QCB + K
+Life Up Fruit | α Partner Assist
+Defense Up Fruit | β Partner Assist
+Boon of the Sun | QCF + K K
+Rule of the Plants | QCB + P P
+## Anakaris
+Air Dash | (air) F F or P P
+Seija no Ayumi | B + LK
+Tenchuu | B or F + HK
+Idainaru Bohi | (air) F + K
+Seinaru Bohi | (air) D + K
+Ooinaru Bohi | (air) DF + K
+Coffin Fall | (air ok) D D + P or K
+Cobra Blow | (air ok) B F + P
+Mummy Drop | (air ok) QCF + P
+Royal Curse | (air) QCF + K
+Pharaoh Cobra Blow | (air ok) B F + P P , then P / K
+Coffin Fall | (air ok) D D + P P
+Pharoah Magic | (air ok) HK LP D LK HP
+Pharaoh Illusion | LP LP F LK HP
+## Baby Bonnie Hood/Bulleta
+Double Jump | (air) U
+Tricky Basket | B or F + HP
+Stumble & Blade | B or F + HP during a dash or backstep
+Surprise & Hop | B or F + HK
+Malice & Mine | DB + K
+Smile & Missile | [B] F + P / K
+Happy & Missile | [D] U + P
+Shy Strike | QCB + P
+Cheer & Fire | (air ok) DP + P / K
+Cool Hunting | QCF + P P
+Beautiful Memory | HCF + K K
+Hyper Apple For You | HCB + K K
+## Blackheart
+Dark Thunder | HCF + P
+Inferno | HCB + P
+Armageddon | QCF + P P
+Judgement Day | (air ok) QCB + P P
+Heart of Darkness | QCF + K K
+## Cable
+Viper Beam | (air ok) QCF + P , then P + U or D to control
+Scimitar | DP + P
+Elec-Trap | (air ok) QCB + K , hold K to delay detonation
+Crackdown | QCF + K
+Psy-Charge | HCB + P
+Hyper Viper Beam | (air ok) QCF + P P , then P + U or D to control
+Time Flip | QCF + K K
+## Cammy
+Double Jump | (air) U
+Steel Slicer | B + HK
+Cannon Drill | (air ok) QCF + K
+Cannon Spike | DP + K
+Axle Spin Knuckle | QCF + P
+Air Cannon Spike | (air) QCB + K
+Cannon Revenge | HCB + P (counter)
+Hooligan Combo | QCB + K , then P or K
+Killer Bee Assault | (air ok) QCB + P P
+Spin Drive Smasher | QCF + K K
+Reverse Shaft Breaker | QCB + K K
+## Captain America
+Shield Slash | (air ok) QCF + P
+Charging Star | QCF + K
+Stars & Stripes | DP + P
+Backflip | HCB + P
+Hyper Charging Star | QCF + K K
+Hyper Stars & Stripes | DP + P P
+Final Justice | QCF + P P
+## Captain Commando
+Captain Fire | (air ok) QCF + P
+Captain Corridor | QCB + P
+Captain Kick | QCB + K
+Commando Strike - Ginzu the Ninja | QCF + LK
+Commando Strike - Mack the Knife | QCF + HK
+Commando Strike - Baby Head | QCF + LK + HP
+Captain Sword | QCF + P P
+Captain Storm | QCF + K K
+## Charlie/Nash
+Knee Kick | (air ok) D + LK
+Spinning Back Knuckle | F + HP
+Jump Sobat | B + HK
+Step Kick | F + HK
+Sonic Boom | [B] F + P
+Flash Kick | [D] U + K
+Moonsault Slash | (air) U~F + K
+Sonic Break | QCF + P P
+Flash Kick Justice | QCB + K K
+Crossfire Blitz | QCF + K K
+## Chun-Li
+Wall-Jump | Jump against a wall, then UF
+Air Dash | (air) F F or P P
+Triple Jump | (air) U (x2)
+Reishiki Kikouken | F + HP
+Kaku Yoku Da | (air) F + HK
+Yousou Kyaku | (air) D + HK
+Kaku Kyaku Raku | DB + HK
+Kikoken | HCF + P
+Hyakuretsukyaku | (air ok) (mash) K
+Sen'en Shuu | HCB + K
+Tenshokyaku | DP + K
+Kikosho | QCF + P P , (mash) P or K
+Senretsukyaku | QCF + K K , (mash) P or K
+Hazan Tenshokyaku | DP + K K
+## Colossus
+Power Tackle | (air ok) QCF + K
+Giant Swing | (air ok) QCF + P , any dir
+Super Dive | (air ok) QCF + P P , D + P / K to dive early
+Super Armor | QCB + P P
+## Cyclops
+Optic Blast | (air ok) QCF + P
+Gene Splice | DP + P , (mash) P
+Cyclone Kick | QCB + K
+Optic Sweep | F~D + P
+Neck Breaker Drop | [B] F + K
+Rapid Punch | [B] F + P , (mash) P
+Beam Throw | HCB + P close, any dir to angle
+Mega Optic Blast | (air ok) QCF + P P
+Super Optic Blast | (air ok) QCF + K K , any dir to direct
+## Dan
+Kuuchuu Chouhatsu | (air) Taunt
+Shami Chouhatsu | D + Taunt
+Gadou-Ken | QCF + P
+Koryu-Ken | DP + P
+Kankuu-Kyaku | (air ok) QCB + K
+Premium Signature | QCF + K
+Shinku Gadou-Ken | QCF + P P
+Koryu-Rekka | QCF + K K
+Hissho-Buraiken | QCB + K K
+Chouhatsu-Densetsu | QCF QCF + Taunt
+Otoko Michi (Level 3) | HP LK B LP LP
+## Dhalsim
+Air Dash | (air) F F or P P
+Drill Zutsuki | (air) D + HP
+Drill Kick | (air) D + K
+Yoga Fire | (air ok) QCF + P
+Yoga Flame | HCB + P
+Yoga Blast | HCB + K
+Yoga Smash | HCB + HP close
+Yoga Teleport | (air ok) RDP or DP + K K or P P
+Yoga Floating | (air ok) QCB + K K , repeat to cancel
+Yoga Inferno | (air ok) QCF + P P , D or U to control flame
+Yoga Strike | QCF + K K
+## Doctor Doom
+Plasma Beam | (air ok) QCF + P
+Photon Shot | (air ok) HCB + P
+Molecular Shield | HCB + K
+Flight | (air ok) QCB + K K , repeat to cancel
+Photon Array | (air ok) HCB + P P
+Sphere Flame | QCF + K K
+Electric Cage | QCF + P P
+## Felicia
+Wall Cling | (air) Hold UB or F
+>Wall Jump | Release UB or F
+>Wall Slide | DB or keep holding UB or F
+Rolling Buckler | QCF + P
+>Rolling Slide | K
+>Neko Punch | LP
+>Rolling Uppercut | HP
+Cat Spike | DP + P
+Delta Kick | (air ok) DP + K
+Sand Splash | QCF + K
+Hell Cat | HCB + K (close)
+Dancing Flash | QCF + P P
+Super Sand Splash | QCF + K K
+Please Help Me! | QCB + K K
+## Gambit
+Kinetic Card | (air ok) QCF + P
+Trick Card | QCB + P
+Cajun Slash | DP + P , LK + HP
+Cajun Strike | [D] U + K
+Cajun Escape | [D] U + P , P for followup
+Royal Flush | QCF + P P
+Cajun Explosion | QCB / QCF + K K
+## Guile
+Split Kick | (air) U + LK
+>Angled Kick | (air) LK
+Jump Chop | (air) U + HP
+Straight | B + HP
+Spinning Back Knuckle | F + HP
+Knee Bazooka | B + LK
+Rolling Sobat | B + HK
+Reverse Spin Kick | F + HK
+Sonic Boom | [B] F + P
+Somersault Flash Kick | Ground: [D] U + K Air: (air) D U + K
+Sonic Hurricane | QCF + P P
+Somersault Strike | QCB + K K
+Crossfire Assault | (air) QCF + K K
+## Hayato
+Dokuryuu and Souryuu | P during a dash, then P again
+Hien | F + HP
+Dai Oiuchi Kougeki | (air ok) D + HK
+Shiden | QCF + P
+Guren | (air ok) DP + P
+Byakkohou | B F + P P close
+Plasma Combo LP1 | B + LP LP LP LP , (mash) LP
+Plasma Combo LP2 | B + LP LP HP HK HP , (mash) LP
+Plasma Combo LP3 | B + LP LP HP HK LP LP
+Plasma Combo LP4 | B + LP LP
+Plasma Combo HP1 | B + HP LP HP HP HP
+Plasma Combo HP2 | B + HP LP HP LK HP
+Plasma Combo HP3 | B + HP LP LP HP HP
+Plasma Combo HP4 | B + HP LP LP LP HK LP LP
+Plasma Combo HP5 | B + HP LP LP HP LP LP LP
+Rasetsuzan | QCF + P P
+Engetsu | QCF + K K
+Plasma Field | (air ok) QCB + K K
+Black Hayato (Level 3) | LP HP B LK HK
+## Hulk
+Gamma Slam | QCF + P
+Gamma Charge | [D] U or [B] F + K , any direction + K to redirect
+Gamma Tornado | HCB + P close
+Gamma Wave | QCF + P P
+Gamma Quake | QCF + K K
+Gamma Crush | QCB + P P , B or F to control landing
+## Iceman
+Ice Beam | (air ok) QCF + P
+Avalanche | (air ok) QCF + K
+Ice Fist | QCB + P
+Arctic Attack | (air ok) QCF + P P
+## Iron Man
+Air Dash | (air) any dir + P P
+Knee Kick | (air) D + HK
+Upward Kick | (air) U + HK
+Directed Laser | (air) F + HP
+Missile Launch | D + HP
+Uni-Beam | (air ok) QCF + P
+Repulsor Blast | HCB + P
+Smart Bombs | (air ok) LK + HP (+ B or F for ranged bombs)
+Flying | (air ok) QCB + K K , repeat to cancel
+Proton Cannon | QCF + P P
+## Jill
+Sliding | D + HK
+Close Fighting A | (air ok) QCF + P , chargeable with HP variant
+Grenade Launcher | DP + P , hold to delay explosion
+Return Fire | HCB + P , (mash) P
+Zombie Escape | QCB + K
+Cerberus Escape | QCF + LK
+Crow Escape | QCF + HK
+Life-Up | α Partner Assist
+Close Fighting A+ | (air ok) QCF + P P
+Rocket Launcher | QCF + K K
+CODE: T-002 | QCB + K K , then QCF + K for a follow-up
+## Jin
+Saotome Diving | (air) D + HK
+Saotome Typhoon | [B] F + P
+Saotome Dynamite | [D] U + P
+Saotome Crush | HCB + K
+Saotome Fire | Taunt , then (mash) P or K
+Saotome Cyclone | QCF + K K
+Blodia Punch | QCF + P P
+Blodia Vulcan | QCB + P P
+Saotome Shine | Must be sole survivor and 30% health left
+## Juggernaut
+Double Fist | F + HP
+Earthquake Punch | F~D + P
+Juggernaut Punch | HCF + P
+Juggernaut Body Press | (air ok) HCF + K
+Cyttorak Power-Up | DP + P P
+Juggernaut Headcrush | QCF + P P , then (mash) P or K
+## Ken
+Mae Geri | (air ok) U + LK after his jumping light kick.
+Senpu Kyaku | (air ok) U + HK
+Inazuma Kakato Wari | F + HK
+Hadoken | (air ok) QCF + P
+Shoryuken | (air ok) DP + P
+Tatsumaki Senpukyaku | (air ok) QCB + K
+Forward Roll | QCB + P
+Shoryu Reppa | QCF + P P
+Shippu Jinraikyaku | QCB + K K , (mash) K
+Shinryuken | QCF + K K , (mash) K
+## M. Bison/Vega
+Psycho Shot | HCF + P
+Psycho Field | HCB + P
+Scissors Kick | (air ok) HCF + K
+Head Stomp | (air ok) [D] U + K , then P
+Skull Diver | (air ok) [D] U + P , then P
+Warp | (air ok) DP + LP / HP / LK / HK
+Flying | (air ok) QCB + K K , repeat to cancel
+Psycho Crusher | (air ok) QCF + P P
+Knee Press Nightmare | QCF + K K
+Psycho Explosion | HCB + P P
+## Magneto
+E-M Disruptor | (air ok) HCF + P
+Hyper Gravitation | (air ok) HCB + K
+Magnetic Forcefield | HCF + K
+Magnetic Blast | (air) U~F + P
+Flying | (air ok) QCB + K K , repeat to cancel
+Magnetic Shockwave | QCF + P P
+Magnetic Tempest | (air ok) QCF + K K
+## Marrow
+Bone-Rang | (air ok) QCF + P
+Towering Spine | DP + P
+Ricochet Slash | QCB + K
+Ride & Slash | (air ok) HCB + P
+Stinger Bones | QCF + P P
+Bone Burst | (air ok) QCB + P P
+## Mega Man/Rockman
+Wall-Jump | Jump against a wall, then UF
+Sliding | D + HK
+Mega Buster | (air ok) HP , hold HP and release
+Mega Upper | (air ok) DP + P
+Item Use | QCF + P
+Item Change - Megaball | QCF + K
+Item Change - Tornado Hold | DP + K
+Item Change - Leaf Shield | QCB + K
+Hyper Mega Man | (air ok) QCF + P P , (mash) P or K
+Rush Drill | QCF + K K , then P / K for Speed Boost
+Beat Plane | QCB + K K , then P / K to fire weapons
+## Morrigan
+Air Dash | (air) F F or P P
+Air Dash Above | (air) F UF U + P P
+Air Dash Below | (air) F DF D + P P
+Moon Tracer | B or F + HP
+Sexual Embrace | (air) B or F + HP
+Breast Anguish | B or F + HK
+Mysterious Arc | DB or DF + HP
+Necro Desire | F + HK
+Shell Pierce | (air) D + HK
+Soul Fist | (air ok) QCF + P
+Shadow Blade | (air ok) DP + P
+Vector Drain | HCB + P close
+Shell Kick | (air) QCB + K
+Soul Eraser | QCF + P P
+Darkness Illusion | (air ok) QCF + K K
+Silhouette Blade | DP + P P
+## Omega Red
+Carbonadium Coil | (air ok) QCF + P / P P
+> Cancel | P before Carbonadium Coil lands
+> Death Factor | (mash) P during Carbonadium Coil
+> Energy Factor | (mash) K during Carbonadium Coil
+> Coil Throw | any dir + P / K during Carbonadium Coil
+Omega Strike | QCF + K / K K
+> Return | B + K
+> Cancel | D + K
+Omega Destroyer | QCB + P P
+Carbonadium Smash | (air) QCB + P P
+## Psylocke
+Psy-Blast | (air ok) QCF + P
+Psy-Blade | QCF + K
+Ninjutsu | HCB + P / K
+> Psy-Thrust (mini) | during Ninjutsu any dir + P
+Psy-Thrust | (air ok) QCB + P , any dir + P to redirect
+Kocho-Gakure | QCF + K K
+Psy-Maelstrom | (air ok) QCB + K K
+## Rogue
+Repeating Punch | (air ok) QCF + P
+Raising Repeating Punch | DP + P
+Power Dive Punch | DP + K , + K to dive
+Power Drain | (air ok) QCB + K
+Goodnight Sugar | QCF + P P
+Hyper Repeating Punch | Assist 1 + Assist 2
+## Roll
+Double Jump | (air) U
+Sliding | D + HK
+Swipe Kick | (air) U + HK
+Roll Buster | (air ok) QCF + P
+Flower Bomb | (air ok) DP + P
+Item Use | QCB + P
+Item Change - Megaball | QCF + K
+Item Change - Tornado Hold | DP + K
+Item Change - Leaf Shield | QCB + K
+Hyper Roll | (air ok) QCF + P P
+Rush Drill | QCF + K K , then P / K for Speed Boost
+Beat Plane | QCB + K K , then P / K to fire weapons
+## Ruby Heart
+Schwarzaile | (air ok) QCF + P , then any dir + P to redirect x2
+Fantome | QCB + K
+Sublimation | QCF + K
+Rafale Cannon | HCB + P
+Power Up Orb | γ Partner Assist
+Flammeile | (air ok) QCF + P P , then any dir + P to redirect x4
+Pare-tonn're | QCF + K K
+Mille Fantomes | QCB + K K
+Tour De Magie | HK LP D LK HP , then LP / LK to throw swords
+## Ryu
+Sakotsu Wari | F + HP
+Senpuu Kyaku | F + HK
+Air Senpuu Kyaku | (air) U + HK
+Mae Geri | (air) U + LK after his jumping light kick
+Hadoken | (air ok) QCF + P
+Shoryuken | DP + P
+Tatsumaki Senpukyaku | (air ok) QCB + K
+Shinku Hadoken | (air ok) QCF + P P
+Shinku Tatsumaki Senpukyaku | QCB + K K
+Shin Shoryuken (Level 3) | DP + P P
+## Sabretooth
+Berserker Claw | QCF + P
+Wild Fang | HCB + P
+Armed Birdie | HCB + K
+Berserker Claw X | QCF + P P
+Weapon X Dash | DP + P P
+Heavy Armed Birdie | HCB + K K
+## Sakura
+Flower Kick | F + HK
+Hadoken | (air ok) QCB + P
+Shouo'uken | (air ok) QCF + P
+Shunpukyaku | (air ok) QCB + K
+Shinkuu Hadoken | QCB + P P
+Midare Zakura | QCF + P P
+Haru Ichiban | QCB + K K
+Dark Sakura (Level 3) | RDP + LK
+## Dark Sakura
+Senpuu Kyaku | F + HK
+Hadoken | (air ok) QCF + P
+Shouo'uken | (air ok) DP + P
+Shunpukyaku | (air ok) QCB + K
+Ashura Senku | RDP or DP + K K or P P
+Shinku Hadoken | QCF + P P
+Midare Zakura | QCF + K K
+Haru Ichiban | QCB + K K
+Shun Goku Satsu (Level 3) | LP LP F LK HP
+Normal Sakura (Level 3) | RDP + LK
+## Sentinel
+Rocket Punch | (air ok) QCF or DP + P
+> Retract | B + P
+Sentinel Force | QCF + K , hold HK variant to delay bomb release
+Flying | (air ok) QCB + K K , repeat to cancel
+Plasma Storm | QCF + P P
+Hard Drive | (air) QCF + P P
+Hyper Sentinel Force | QCF + K K
+## Servbot
+Servbot Fire | (air ok) QCF + P (hold to charge)
+Servbot Machine | QCF + K
+Supporting Attack | QCB + P / K
+Paper Airplane | QCF + Taunt, hold to keep flying, D or U to control
+Lunch Rush | QCF + P P
+King Servbot | QCF + K K , then P / K for Hammer Smash while moving
+## Shuma-Gorath
+Mystic Stare | [B] F + P
+Mystic Smash | (air ok) [B] F + K
+Devitalization | HCB + K
+Hyper Mystic Smash | QCF + K K
+Chaos Dimension (Level 3) | QCF + P P + HP / HK
+## Silver Samurai
+Shuriken | (air ok) QCF + P , D or U to control
+Hyakuretsutoh | (mash) LP , F F to dash
+Hyakuretsutoh (quick) | DP + (mash) P , F F to dash
+Toki-Rai | QCB + P
+Toki-Hyo | QCB + LK
+Toki-En | QCB + HK
+Cho-Shuriken | QCF + P P , D or U to control, air ok during Toki-Rai
+Raimeiken | QCF + K K
+Hyougajin | QCF + K K during Toki-Hyo
+Gurenjin | QCF + K K during Toki-En
+Hyper Hyakuretsu | Assist 1 + Assist 2
+## SonSon
+Cloud Dash | (air) F F or P P
+Cloud Backstep | (air) B B or B + P P
+Gansai Hekiretsu | F + HP
+Fuusetsu Zan | (air ok) (mash) P
+Shienbu | (air ok) QCF + P
+Seiten Rengeki | (air ok) DP + P
+Kingin Kore Hyoutan | HCB + P close
+Ground Crawl | HCF + K
+Wall Climb | QCB + K , then K to kick off, P to cancel
+Healing Peach | α Partner Assist
+Tenchi Tsukan | (air ok) QCF + P P
+POW | QCF + K K
+Monkey King | QCB + P P , hold K , D or U to control, LP / HP
+## Spider-Man
+Web Ball | (air ok) QCF + P
+Spider Sting | DP + P , + P to knock down
+Web Swing | (air ok) QCB + K
+Web Throw | HCB + P
+Maximum Spider | (air ok) QCF + P P , any dir to direct
+Crawler Assault | QCF + K K
+Ultimate Web Throw | QCB + P P
+## Spiral
+Dancing Sword | HCB + P
+> Sword Throw | during Dancing Sword (air ok) LP
+> Flying Sword A | during Dancing Sword QCF + LP / HP
+> Flying Sword B | during Dancing Sword QCF + LK / HK
+Six Hand Grapple | DP + P
+Teleport | (air ok) QCB + LK , then LK / HK / LP / HP to control landing
+Dance-nosedive | (air) QCB + HK
+Stampede Sword | QCF + P P
+Power Dance | QCF + K K
+Speed Dance | QCB + K K
+Metamorphosis (Level 3) | QCB + P P + P
+Hyper Metamorphosis | Assist 1 + Assist 2
+## Storm
+Whirlwind | (air ok) QCF + K
+Double Typhoon | (air ok) HCB + K
+Lightning Attack | (air ok) Any direction + LK + HP , repeat to redirect x3
+Lightning Sphere | QCB + P
+Flying | (air ok) QCB + K K , repeat to cancel
+Hail Storm | QCB + P P
+Lightning Storm | (air ok) HCF + P P
+## Strider Hiryu
+Wall-Jump | Jump against a wall, then UF
+Double Jump | (air) U
+Sliding Kick | DF + HK
+Ame no Murakumo | QCF + P
+Excalibur | (air) QCF + P / K
+Gram | DP + P / K
+Vajra | QCB + K
+Wall Cling | QCB + P , then P / K / U + K / B + F
+Formation A (Tiger/Eagle) | QCF + LK / HK
+Formation B | [B] F + P , repeat to fire
+Formation C | [B] F + K
+Warp | RDP + P / K
+Ouroboros | QCF + P P , then P / K for additional attacks
+Ragnarok | DP + P P
+Legion | QCF + K K
+## Thanos
+Titan Crush | (air ok) QCF + P
+Black Sphere | QCF + K
+Gauntlet Power | QCF + P P
+Gauntlet Reality | QCB + P P
+Gauntlet Space | QCF + K K
+Gauntlet Soul | QCB + K K
+## Tron
+Air Dash | (air) F F or P P
+Boulder Throw | HK , hold HK and release
+Spinning Legs | DB or D or DF + HK
+Beacon Bomb | QCF + P
+Servbot Launcher | DP + P
+Bonne Strike | (air ok) QCF + K
+Lunch Rush | QCF + P P
+King Servbot | QCB + P P
+## Venom
+Air Dash | (air) F F or P P
+Venom Fang | (air ok) QCF + P
+Venom Rush | QCF + K
+Web Throw | HCB + P
+Venom Web | QCF + P P
+Venomous Raging Demon | QCF + K K
+## War Machine
+Air Dash | (air) any dir + P P
+Knee Kick | (air) D + HK
+Upward Kick | (air) U + HK
+Laser Blast | (air) F + HP
+Missile Launch | D + HP
+Shoulder Cannon | (air ok) QCF + P
+Low Shoulder Cannon | QCF + K
+Repulsor Blast | HCB + P
+Smart Bomb | (air ok) LK + HP , direct B or F
+Flying | (air ok) QCB + K K , repeat to cancel
+Proton Cannon | QCF + P P
+War Destroyer | QCF + K K
+## Wolverine
+Wall-Jump | Jump against a wall, then UF
+Slide Claw | (air) DF + HK
+Trampling | (air) D + HK
+Berserker Barrage | QCF + P , (mash) P
+Tornado Claw | DP + P , (mash) P
+Berserker Slash | QCB + P
+Drill Claw | (air ok) LK + HP can be directed
+Berserker Barrage X | QCF + P P
+Fatal Claw | (air ok) DP + K K
+Berserker Charge | QCF + K K
+Weapon X | DP + P P
+## Wolverine (Bone claw)
+Wall-Jump | Jump against a wall, then UF
+Slide Claw | (air) DF + HK
+Trampling | (air) D + HK
+Berserker Barrage | QCF + P , (mash) P
+Tornado Claw | DP + P , (mash) P
+Drill Claw | (air ok) LK + HP can be directed
+Berserker Barrage X | QCF + P P
+Weapon X | DP + P P
+## Zangief
+Spinning Piledriver | (air ok) 360 + P close
+Double Lariat/Quick Double Lariat | (air ok) B / F + P P / K K
+Flying Powerbomb | HCF + K
+Atomic Suplex | close HCF + K
+Glowing Fist | DP + P
+Aerial Russian Slam | DP + K
+Final Atomic Buster | 360 + P P
+Ultra Final Atomic Buster (Level 3) | 360 + K K
+Super Lariat | Assist 1 + Assist 2
+Iron Body | RDP + LK
+## Mech Zangief
+Spinning Piledriver | (air ok) 360 + P close
+Double Lariat/Quick Double Lariat | (air ok) B / F + P P / K K
+Flying Powerbomb | HCF + K
+Atomic Suplex | close HCF + K
+Glowing Fist | DP + P
+Aerial Russian Slam | DP + K
+Vodka Fire | QCF + P
+Final Atomic Buster | 360 + P P
+Siberian Blizzard | 360 + K K
+Super Lariat | Assist 1 + Assist 2
+Normal Zangief | RDP + LK

@@ -52,7 +52,7 @@ def main():
 
     setl("MVC2_GAME_SOURCES", game)
     setl("MVC2_DATA_SOURCES", data)
-    lines.append(f"set(MVC2_DATA_START {start})")
+    lines.append(f"set(MVC2_DATA_START \"{start}\")")  # quoted: the build dir may contain spaces
     setl("MVC2_HEADERS", heads)
     n = 0
     for i in range(0, len(allsrc), chunk):

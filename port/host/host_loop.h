@@ -15,4 +15,5 @@ extern int host_verbose;
 extern void (*host_present_hook)(void);
 extern unsigned long host_frame_count;
 extern int mvc2_unlock_all; /* "unlock everything", default 1 */
+extern void (*mvc2_step_hook)(const char *name); /* after each STEP when set */
 #endif

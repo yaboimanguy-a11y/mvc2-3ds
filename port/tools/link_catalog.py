@@ -289,11 +289,44 @@ HOST_LIBS = [
 ]
 
 
-@functools.lru_cache(None)
-def host_runtime_names():
+def host_runtime_names(target=None):
     """Names the host C library / compiler runtime defines.  A game reference
     to one of these (memcpy, sqrtf, __udivdi3, ...) is left to the host
-    toolchain and never aliased onto game code or data."""
+    toolchain and never aliased onto game code or data.  target "arm3ds"
+    adds what devkitARM links into a 3DS program (newlib, libm, libgcc,
+    libctru): with a single ELF namespace, a --defsym of memcpy onto the
+    game's memcpy forwarder (which calls memcpy) would recurse forever."""
+    names = _host_runtime_names()
+    if target == "arm3ds":
+        names = names | _devkitarm_names()
+    return names
+
+
+@functools.lru_cache(None)
+def _devkitarm_names():
+    import glob
+    import os
+    import subprocess
+    dkp = os.environ.get("DEVKITPRO", "/opt/devkitpro")
+    nm = f"{dkp}/devkitARM/bin/arm-none-eabi-nm"
+    libs = glob.glob(f"{dkp}/devkitARM/lib/gcc/arm-none-eabi/*/armv6k/fpu/libgcc.a") + \
+        glob.glob(f"{dkp}/devkitARM/arm-none-eabi/lib/armv6k/fpu/lib[cm].a") + \
+        glob.glob(f"{dkp}/devkitARM/arm-none-eabi/lib/armv6k/fpu/libsysbase.a") + \
+        glob.glob(f"{dkp}/libctru/lib/libctru.a")
+    if not os.path.exists(nm) or not libs:
+        raise SystemExit(f"link_catalog: devkitARM libraries not found under {dkp} (needed for arm3ds)")
+    out = set()
+    for lib in libs:
+        r = subprocess.run([nm, "-g", "--defined-only", lib], capture_output=True, text=True)
+        for line in r.stdout.splitlines():
+            f = line.split()
+            if len(f) >= 3 and f[1] not in ("U", "w", "v"):
+                out.add(f[2])
+    return frozenset(out)
+
+
+@functools.lru_cache(None)
+def _host_runtime_names():
     import os
     import shutil
     import subprocess

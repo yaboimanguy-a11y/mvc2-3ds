@@ -3,7 +3,15 @@
 #include "resample.h"
 #include "tsd.h"
 #include "tsd_client.h"
+#ifdef __3DS__
+/* Nintendo 3DS: NDSP output fed by a mixer thread (the 3DS section below) */
+#include <3ds.h>
+#include <stdio.h>
+typedef int SDL_AudioDeviceID;
+#define SDL_Log(...) fprintf(stderr, __VA_ARGS__)
+#else
 #include <SDL.h>
+#endif
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,8 +54,14 @@ static struct {
 } A;
 
 /* ---- locking ---- */
+#ifdef __3DS__
+static RecursiveLock a3_lock;
+void audio_lock(void) { if (A.dev) RecursiveLock_Lock(&a3_lock); }
+void audio_unlock(void) { if (A.dev) RecursiveLock_Unlock(&a3_lock); }
+#else
 void audio_lock(void) { if (A.dev) SDL_LockAudioDevice(A.dev); }
 void audio_unlock(void) { if (A.dev) SDL_UnlockAudioDevice(A.dev); }
+#endif
 
 /* ---- tsd_client sink: flush -> driver, status -> driver ---- */
 static void sink_rpc(void *ctx, const uint8_t *buf, size_t n)
@@ -191,13 +205,16 @@ void audio_render(float *out, int frames)
     }
 }
 
+#ifndef __3DS__ /* the 3DS mixer renders 48 kHz directly */
 static int pull48(void *ctx, float *dst, int max)
 {
     (void)ctx;
     audio_render(dst, max);
     return max;
 }
+#endif
 
+#ifndef __3DS__
 static void SDLCALL device_cb(void *ud, Uint8 *stream, int len)
 {
     (void)ud;
@@ -206,6 +223,128 @@ static void SDLCALL device_cb(void *ud, Uint8 *stream, int len)
     if (A.dev_rate == AUDIO_RATE) audio_render(out, frames);
     else rs_stream_run(&A.out_rs, pull48, NULL, out, frames);
 }
+#else
+/* ---- Nintendo 3DS output -------------------------------------------------
+ * NDSP channel 0 plays 16-bit stereo at 48 kHz (the DSP resamples to its
+ * own rate).  A mixer thread - on core 2 of a New 3DS, else core 1 - keeps
+ * A3_NBUF wave buffers of A3_FRAMES queued: when the DSP finishes one
+ * (ndspSetCallback -> event) it renders the next with audio_render() under
+ * the engine lock, the same lock every padx_* / TSD call takes.  The game
+ * thread never mixes.  Needs the DSP firmware (sdmc:/3ds/dspfirm.cdc). */
+#define A3_FRAMES 512
+#define A3_NBUF 6
+static ndspWaveBuf a3_wbuf[A3_NBUF];
+static int16_t *a3_pcm;
+static float a3_mix[A3_FRAMES * 2];
+static Thread a3_thread;
+static LightEvent a3_event;
+static volatile int a3_quit;
+static int a3_core;
+
+static void a3_fill(ndspWaveBuf *wb)
+{
+    int16_t *d = (int16_t *)wb->data_pcm16;
+    RecursiveLock_Lock(&a3_lock);
+    audio_render(a3_mix, A3_FRAMES);
+    RecursiveLock_Unlock(&a3_lock);
+    for (int i = 0; i < A3_FRAMES * 2; i++) {
+        float x = a3_mix[i] * 32767.0f;
+        d[i] = (int16_t)(x > 32767.0f ? 32767 : x < -32768.0f ? -32768 : (int)x);
+    }
+    DSP_FlushDataCache(d, A3_FRAMES * 2 * sizeof(int16_t));
+    ndspChnWaveBufAdd(0, wb);
+}
+
+static void a3_dsp_cb(void *unused)
+{
+    (void)unused;
+    LightEvent_Signal(&a3_event);
+}
+
+static void a3_thread_main(void *arg)
+{
+    (void)arg;
+    while (!a3_quit) {
+        for (int i = 0; i < A3_NBUF; i++)
+            if (a3_wbuf[i].status == NDSP_WBUF_DONE || a3_wbuf[i].status == NDSP_WBUF_FREE)
+                a3_fill(&a3_wbuf[i]);
+        LightEvent_Wait(&a3_event);
+    }
+}
+
+static int a3_open(void)
+{
+    Result r = ndspInit();
+    if (R_FAILED(r)) {
+        SDL_Log("audio: ndspInit failed (%08lX): no DSP firmware? Dump it once with the DSP1 homebrew "
+                "(it writes sdmc:/3ds/dspfirm.cdc)\n", (unsigned long)r);
+        return -1;
+    }
+    RecursiveLock_Init(&a3_lock);
+    LightEvent_Init(&a3_event, RESET_ONESHOT);
+    a3_pcm = (int16_t *)linearAlloc(sizeof(int16_t) * 2 * A3_FRAMES * A3_NBUF);
+    if (!a3_pcm) { ndspExit(); return -1; }
+    memset(a3_pcm, 0, sizeof(int16_t) * 2 * A3_FRAMES * A3_NBUF);
+    ndspSetOutputMode(NDSP_OUTPUT_STEREO);
+    ndspChnReset(0);
+    ndspChnSetInterp(0, NDSP_INTERP_POLYPHASE);
+    ndspChnSetRate(0, (float)AUDIO_RATE);
+    ndspChnSetFormat(0, NDSP_FORMAT_STEREO_PCM16);
+    float mix[12] = { 1.0f, 1.0f };
+    ndspChnSetMix(0, mix);
+    memset(a3_wbuf, 0, sizeof a3_wbuf);
+    for (int i = 0; i < A3_NBUF; i++) {
+        a3_wbuf[i].data_pcm16 = a3_pcm + i * A3_FRAMES * 2;
+        a3_wbuf[i].nsamples = A3_FRAMES;
+        a3_wbuf[i].status = NDSP_WBUF_FREE;
+    }
+    A.dev = 1;              /* the lock is live from here */
+    A.dev_rate = AUDIO_RATE;
+    ndspSetCallback(a3_dsp_cb, NULL);
+    a3_quit = 0;
+    /* core 2 (New 3DS: free for apps), else core 1 (the system core, which
+     * an app gets a share of), else the game's own core */
+    s32 prio = 0x30;
+    svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+    a3_core = 2;
+    a3_thread = threadCreate(a3_thread_main, NULL, 32 * 1024, prio - 1, 2, false);
+    if (!a3_thread) {
+        APT_SetAppCpuTimeLimit(30);
+        a3_core = 1;
+        a3_thread = threadCreate(a3_thread_main, NULL, 32 * 1024, prio - 1, 1, false);
+    }
+    if (!a3_thread) {
+        a3_core = -1;
+        a3_thread = threadCreate(a3_thread_main, NULL, 32 * 1024, prio - 1, -1, false);
+    }
+    if (!a3_thread) {
+        ndspSetCallback(NULL, NULL);
+        A.dev = 0;
+        linearFree(a3_pcm);
+        ndspExit();
+        return -1;
+    }
+    LightEvent_Signal(&a3_event); /* the first fill */
+    SDL_Log("audio: NDSP 48 kHz stereo, %d x %d frames, mixer thread on core %d\n", A3_NBUF, A3_FRAMES, a3_core);
+    return 0;
+}
+
+static void a3_close(void)
+{
+    if (!A.dev) return;
+    a3_quit = 1;
+    LightEvent_Signal(&a3_event);
+    threadJoin(a3_thread, U64_MAX);
+    threadFree(a3_thread);
+    ndspSetCallback(NULL, NULL);
+    ndspChnReset(0);
+    ndspExit();
+    linearFree(a3_pcm);
+    A.dev = 0;
+}
+
+int audio_3ds_core(void) { return A.dev ? a3_core : -2; }
+#endif
 
 void audio_set_master(float g) { audio_lock(); A.master = g; audio_unlock(); }
 void audio_set_music_volume(float g) { audio_lock(); A.music = g; audio_unlock(); }
@@ -366,7 +505,11 @@ void audio_set_paused(int paused)
     if (A.web) web_suspend(paused);
 #endif
     if (!A.dev) return;
+#ifdef __3DS__
+    ndspChnSetPaused(0, paused != 0);
+#else
     SDL_PauseAudioDevice(A.dev, paused);
+#endif
 }
 
 void audio_set_loader(AudioAfsLoader fn, void *ctx) { A.loader = fn; A.loader_ctx = ctx; }
@@ -387,6 +530,9 @@ int audio_init(int open_device)
     tsdc_init();
     A.init = 1;
     if (!open_device) return 0;
+#ifdef __3DS__
+    return a3_open();
+#endif
 #ifdef __EMSCRIPTEN__
     A.web_rate = wa_open(AUDIO_RATE);
     if (A.web_rate <= 0) { A.web_rate = 0; return -1; }
@@ -395,6 +541,7 @@ int audio_init(int open_device)
     SDL_Log("audio: Web Audio %d Hz%s", A.web_rate, A.web_rate == AUDIO_RATE ? "" : " (resampled from 48 kHz)");
     return 0;
 #endif
+#ifndef __3DS__
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
         SDL_Log("audio: SDL_InitSubSystem(AUDIO): %s", SDL_GetError());
         return -1;
@@ -417,12 +564,17 @@ int audio_init(int open_device)
     SDL_Log("audio: %d Hz, %d frames/buffer%s", have.freq, have.samples,
             have.freq == AUDIO_RATE ? "" : " (resampled from 48 kHz)");
     return 0;
+#endif
 }
 
 void audio_shutdown(void)
 {
     if (!A.init) return;
+#ifdef __3DS__
+    a3_close();
+#else
     if (A.dev) SDL_CloseAudioDevice(A.dev);
+#endif
     A.dev = 0;
     tsdc_set_sink(NULL);
     tsd_shutdown(&A.tsd);

@@ -75,3 +75,33 @@ int host_fill_ee_holes(void)
              filled, ptrs);
     return 0;
 }
+
+/*
+ * EE data words that hold scratchpad addresses (0x70000000 + offset, the
+ * 16 KB on-chip RAM): the character drawer's tile cache keeps its work state
+ * at 0x70000740 and its decompression staging at 0x70000744
+ * (func_00412260 -> func_00413B20 / func_00413A80, RENDER_PATH.md).  They are
+ * credited C data with the raw EE value, so they become pointers into the
+ * host's scratchpad array (gen_link_glue.py: mvc2_ee_scratchpad, which the
+ * scratchpad symbols already alias).  Without this the game's own drawer
+ * writes to address 0x70000740: a crash on the 3DS (data abort) and an out
+ * of bounds access on wasm.  The frontend replaces the drawer, so only the
+ * headless runner and the 3DS build reach it today.
+ * The 0x7000000x words in the DMA packet templates (data_pkt_*) are DMA
+ * tags, not addresses, and stay as they are.
+ */
+extern u32 D_004C2510[], D_004C2514[];
+extern unsigned char mvc2_ee_scratchpad[];
+#define EE_SCRATCHPAD 0x70000000u
+#define EE_SCRATCHPAD_SIZE 0x4000u
+
+void host_relocate_scratchpad_ptrs(void)
+{
+    u32 *const words[] = { D_004C2510, D_004C2514 };
+    unsigned i;
+    for (i = 0; i < sizeof words / sizeof words[0]; i++) {
+        u32 v = *words[i];
+        if (v >= EE_SCRATCHPAD && v < EE_SCRATCHPAD + EE_SCRATCHPAD_SIZE)
+            *words[i] = (u32)(uintptr_t)(mvc2_ee_scratchpad + (v - EE_SCRATCHPAD));
+    }
+}

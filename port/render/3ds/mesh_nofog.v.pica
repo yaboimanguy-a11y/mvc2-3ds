@@ -1,0 +1,107 @@
+; mesh.v.pica without the texcoord1 (fog ramp) output, for the self-test's
+; bisection of the mesh-shader hang (r3ds_set_mesh_mode R3DS_MESH_GPU_NOFOG).
+;
+; Mesh vertex shader of the 3DS renderer: the VU1 path of r_mesh.c (its GL
+; k_mvs) for r3ds_mesh_draw (r_c3d.c).  No branches: the three colour paths
+; are all computed and weighted by `sel` (0 / 1), the UV transform by sel.w.
+;
+; Input (MVtx, 48 bytes): v0 = position, v1 = normal, v2 = colour (byte
+; units, floats), v3 = uv.
+; Output: position (clip, PICA depth as in r2d.v.pica: -(window depth) * w),
+; colour = GS-unit colour * cnorm (the TEV scales it back: x2 for the PS2's
+; 128 = 1.0), texcoord0 = uv * uvscale, texcoord1.x = fog factor on the
+; fog ramp texture.
+
+.fvec mvp[4]     ; rows: clip.j = dot(mvp[j], (pos, 1))
+.fvec vp         ; ax, bx, ay, by: x = c.x * ax + c.w * bx, y = c.y * ay + c.w * by
+.fvec misc       ; vpz, lclamp, fog far, fog 1 / (far - near)
+.fvec cscale     ; vertex colour bytes -> GS units
+.fvec modc       ; 0x66 / 255 (or 1)
+.fvec matsel     ; material colour (GS units) when that path is on, else 0
+.fvec sel        ; x lit, y (unused), z vertex colour, w UV transform
+.fvec fsel       ; fog: f' = f * x + y   (fog on: 1, 0; off: 0, 1)
+.fvec uvrow0     ; uv0.x uv0.y uv1.x uv1.y   (matrix slot 0x1A rows 0 and 1)
+.fvec uvrow1     ; uv3.x uv3.y               (row 3)
+.fvec uvscale    ; texture coordinate scale (non power-of-two textures)
+.fvec ldir[3]    ; model-space directions to the lights
+.fvec lcol[3]    ; light colours (GS units)
+.fvec lamb       ; ambient (GS units); w = alpha
+.fvec cnorm      ; GS units -> TEV input
+
+.constf k0(1.0, 0.0, 0.5, 0.99609375)     ; 1, 0, 1/2, 255/256
+.alias ONE  k0.xxxx
+.alias ZERO k0.yyyy
+.alias HALF k0.zzzz
+
+.out opos position
+.out oclr color
+.out otc0 texcoord0
+
+.alias ipos v0
+.alias inrm v1
+.alias icol v2
+.alias iuv  v3
+
+.proc main
+    ; clip = mvp * (pos, 1)
+    mov r0.xyz, ipos
+    mov r0.w, ONE
+    dp4 r1.x, mvp[0], r0
+    dp4 r1.y, mvp[1], r0
+    dp4 r1.z, mvp[2], r0
+    dp4 r1.w, mvp[3], r0
+
+    ; the game's viewport in canvas NDC
+    mul r2.x, vp.x, r1.x
+    mul r3.x, vp.y, r1.w
+    add opos.x, r2.x, r3.x
+    mul r2.y, vp.z, r1.y
+    mul r3.y, vp.w, r1.w
+    add opos.y, r2.y, r3.y
+    ; z: GL NDC z = c.z * vpz / w; PICA z = -((c.z * vpz + w) / 2)
+    mul r2.z, misc.x, r1.z
+    add r2.z, r2.z, r1.w
+    mul r2.z, HALF, r2.z
+    mov opos.z, -r2.z
+    mov opos.w, r1.w
+
+    ; lit: min(sum lcol[k] * max(n . ldir[k], 0) + ambient, lclamp), alpha = lamb.w
+    dp3 r4.x, ldir[0], inrm
+    dp3 r4.y, ldir[1], inrm
+    dp3 r4.z, ldir[2], inrm
+    max r4.xyz, ZERO, r4.xyz
+    mul r5.xyz, lcol[0].xyz, r4.xxx
+    mul r6.xyz, lcol[1].xyz, r4.yyy
+    add r5.xyz, r5.xyz, r6.xyz
+    mul r6.xyz, lcol[2].xyz, r4.zzz
+    add r5.xyz, r5.xyz, r6.xyz
+    add r5.xyz, lamb.xyz, r5.xyz
+    min r5.xyz, misc.yyy, r5.xyz
+    mov r5.w, lamb.w
+    mul r5, modc, r5
+    flr r5, r5
+
+    ; vertex colour: floor(col * cscale * mod)
+    mul r7, cscale, icol
+    mul r7, modc, r7
+    flr r7, r7
+
+    ; colour = lit * sel.x + vertex * sel.z + material (matsel is 0 when off)
+    mul r5, sel.xxxx, r5
+    mul r7, sel.zzzz, r7
+    add r5, r5, r7
+    add r5, matsel, r5
+    mul oclr, cnorm, r5
+
+    ; uv: a_uv, or uv0 * u + uv1 * v + uv3 (weighted by sel.w)
+    mul r8.xy, uvrow0.xy, iuv.xx
+    mul r9.xy, uvrow0.zw, iuv.yy
+    add r8.xy, r8.xy, r9.xy
+    add r8.xy, uvrow1.xy, r8.xy
+    add r9.xy, -iuv.xy, r8.xy
+    mul r9.xy, sel.wwww, r9.xy
+    add r9.xy, iuv.xy, r9.xy
+    mul otc0.xy, uvscale.xy, r9.xy
+
+    end
+.end

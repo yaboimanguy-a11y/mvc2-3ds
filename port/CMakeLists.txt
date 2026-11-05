@@ -139,9 +139,13 @@ set(MVC2_HOST_OPTIONS
   -Wno-error=implicit-function-declaration -Wno-error=int-conversion
   -Wno-error=incompatible-pointer-types -Wno-error=implicit-int
   -Wno-error=return-type -Wno-error=incompatible-function-pointer-types
-  "SHELL:-include ${MVC2_ROOT}/port/include/ps2_compat.h")
+  "SHELL:-include \"${MVC2_ROOT}/port/include/ps2_compat.h\"")
 set(MVC2_HOST_INCLUDES
   "${HSRC}/src" "${HSRC}/src/data" "${MVC2_ROOT}/src" "${MVC2_ROOT}/src/data")
+if(MVC2_3DS)
+  # EE enums are int-sized; devkitARM's default (host code) is short enums
+  list(APPEND MVC2_HOST_OPTIONS -fno-short-enums)
+endif()
 
 function(mvc2_object_lib name)
   add_library(${name} OBJECT ${ARGN})
@@ -159,7 +163,15 @@ mvc2_object_lib(mvc2_game_data "${MVC2_DATA_START}" ${MVC2_DATA_HSRC})
 # and the host code that stands in for it: port/host/ps2_float.c.
 # Verified against the oracle (native) and in the browser build; game logic
 # about 13% slower on wasm (794 vs 911 frames/s headless).
-option(MVC2_PS2_FLOAT "EE single-precision rounding for the game code" ON)
+# The 3DS needs no rewrite: its VFP does the same in hardware with FPSCR
+# round-toward-zero + flush-to-zero (port/platform/3ds/sys_3ds.c), and a
+# helper call per float operation is too slow for its ARM11.
+if(MVC2_3DS)
+  set(_ps2fp_default OFF)
+else()
+  set(_ps2fp_default ON)
+endif()
+option(MVC2_PS2_FLOAT "EE single-precision rounding for the game code" ${_ps2fp_default})
 set(MVC2_FP_LAUNCHER "")
 if(MVC2_PS2_FLOAT)
   set(MVC2_FP_LAUNCHER "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ps2fp-cc.pl;")
@@ -189,6 +201,8 @@ set(GLUE "${CMAKE_BINARY_DIR}/glue")
 set(GLUE_SRCS "${GLUE}/mvc2_glue_data.c" "${GLUE}/mvc2_glue_stubs.c" "${GLUE}/mvc2_glue_table.c")
 if(EMSCRIPTEN)
   set(_glue_target emscripten)
+elseif(MVC2_3DS)
+  set(_glue_target arm3ds)
 elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "wasm32")
   set(_glue_target wasm32)
 else()
@@ -224,7 +238,18 @@ endif()
 
 set_source_files_properties(${MVC2_HOST_CORE_SRCS} PROPERTIES OBJECT_DEPENDS "${GLUE}/mvc2_host_protos.h")
 
-add_executable(mvc2_host ${MVC2_STUB_SRCS} ${GLUE_SRCS} $<TARGET_OBJECTS:mvc2_host_core>
+if(MVC2_3DS)
+  # newlib + libctru headers for the host side (port/cmake/3ds-clang.cmake)
+  target_include_directories(mvc2_host_core SYSTEM PRIVATE ${MVC2_3DS_SYSTEM_INCLUDES})
+  # the headless runner's main on the 3DS: console output, disc on the SD card
+  set(MVC2_HOST_MAIN_SRCS ${MVC2_STUB_SRCS})
+  list(FILTER MVC2_HOST_MAIN_SRCS EXCLUDE REGEX "host_main\\.c$")
+  list(APPEND MVC2_HOST_MAIN_SRCS "${MVC2_ROOT}/port/platform/3ds/host_main_3ds.c"
+    "${MVC2_ROOT}/port/platform/3ds/sys_3ds.c")
+else()
+  set(MVC2_HOST_MAIN_SRCS ${MVC2_STUB_SRCS})
+endif()
+add_executable(mvc2_host ${MVC2_HOST_MAIN_SRCS} ${GLUE_SRCS} $<TARGET_OBJECTS:mvc2_host_core>
   $<TARGET_OBJECTS:mvc2_game_data>)
 target_include_directories(mvc2_host PRIVATE "${MVC2_ROOT}/port/stubs")
 target_compile_options(mvc2_host PRIVATE -fno-common)
@@ -247,6 +272,30 @@ if(EMSCRIPTEN)
     target_link_options(mvc2_host PRIVATE -sEMULATE_FUNCTION_POINTER_CASTS=1)
   endif()
   set_target_properties(mvc2_host PROPERTIES SUFFIX ".js")
+elseif(MVC2_3DS)
+  # --sort-section=name: the .data.ee_<address> sections in EE order (R18);
+  # --no-enum-size-warning: game objects use int enums, devkitARM short ones
+  # --no-gc-sections: 3dsx.specs adds --gc-sections, which would drop EE data
+  # units nothing names; the image must stay contiguous (R18), as on the web
+  set(MVC2_3DS_LINK_OPTIONS "@${GLUE}/link_extra.rsp" -Wl,--sort-section=name
+    -Wl,--no-gc-sections -Wl,--no-enum-size-warning)
+  # mvc2_3dsx(<elf target> <name> <title> <description>): <name>.3dsx next to the ELF
+  function(mvc2_3dsx tgt name title desc)
+    set(_smdh "${CMAKE_BINARY_DIR}/${name}.smdh")
+    add_custom_command(OUTPUT "${_smdh}"
+      COMMAND "${MVC2_SMDHTOOL}" --create "${title}" "${desc}" "mvc2-ps2-decomp"
+              "${DEVKITPRO}/libctru/default_icon.png" "${_smdh}"
+      COMMENT "smdhtool: ${name}.smdh")
+    add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/${name}.3dsx"
+      COMMAND "${MVC2_3DSXTOOL}" "$<TARGET_FILE:${tgt}>" "${CMAKE_BINARY_DIR}/${name}.3dsx" "--smdh=${_smdh}"
+      DEPENDS ${tgt} "${_smdh}"
+      COMMENT "3dsxtool: ${name}.3dsx")
+  endfunction()
+  target_include_directories(mvc2_host SYSTEM PRIVATE ${MVC2_3DS_SYSTEM_INCLUDES})
+  target_link_options(mvc2_host PRIVATE ${MVC2_3DS_LINK_OPTIONS} "-Wl,-Map,${CMAKE_BINARY_DIR}/mvc2_host.map")
+  target_link_libraries(mvc2_host PRIVATE ctru m)
+  set_target_properties(mvc2_host PROPERTIES SUFFIX ".elf")
+  mvc2_3dsx(mvc2_host mvc2_boottest "MvC2 boot test" "PS2 decomp port: logic only, no picture")
 else()
   # --sort-section=name: the .data.ee_<address> sections in EE order (R18)
   target_link_options(mvc2_host PRIVATE -no-pie "@${GLUE}/link_extra.rsp" -Wl,--sort-section=name)
@@ -257,7 +306,80 @@ endif()
 # Native i386: SDL2 2.x i386 runtime (libsdl2-2.0-0:i386) + the system SDL2
 # headers; GL is loaded through SDL.  Web: SDL2/WebGL2 port + port/web/shell.html
 # (the same page as the viewer, so port/tools/pack_personal.py works on it).
-option(MVC2_APP "build the mvc2 app (SDL2 frontend)" ON)
+if(MVC2_3DS)
+  # ---- the 3DS app: game + host + the fl render library on citro3d ----------
+  # port/render/3ds (renderer, character tile cache, GL shim for r_mesh.c),
+  # port/host/fe render glue, port/platform/3ds (main, SD card, log).
+  set(PORT_DIR "${MVC2_ROOT}/port")
+  set(MVC2_3DS_APP_STUBS ${MVC2_STUB_SRCS})
+  list(FILTER MVC2_3DS_APP_STUBS EXCLUDE REGEX "host_main\\.c$")
+  # vertex shaders (picasso) as C arrays: r2d_shbin (2D), mesh_shbin (meshes)
+  set(_shc "")
+  foreach(_sh r2d mesh mesh_nofog)
+    set(_shbin "${CMAKE_BINARY_DIR}/${_sh}.shbin")
+    add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/${_sh}_shbin.c"
+      COMMAND "${DEVKITPRO}/tools/bin/picasso" -o "${_shbin}" "${PORT_DIR}/render/3ds/${_sh}.v.pica"
+      COMMAND ${Python3_EXECUTABLE} "${PORT_DIR}/cmake/bin2c.py" "${_shbin}" "${CMAKE_BINARY_DIR}/${_sh}_shbin.c" ${_sh}_shbin
+      DEPENDS "${PORT_DIR}/render/3ds/${_sh}.v.pica" "${PORT_DIR}/cmake/bin2c.py"
+      COMMENT "picasso: ${_sh}.v.pica")
+    list(APPEND _shc "${CMAKE_BINARY_DIR}/${_sh}_shbin.c")
+  endforeach()
+  add_executable(mvc2_3ds ${MVC2_3DS_APP_STUBS} ${GLUE_SRCS}
+    $<TARGET_OBJECTS:mvc2_host_core> $<TARGET_OBJECTS:mvc2_game_data>
+    ${PORT_DIR}/host/fe/fe_render.c ${PORT_DIR}/host/fe/fe_char.c ${PORT_DIR}/host/fe/fe_mesh.c
+    ${PORT_DIR}/render/r_mesh.c ${PORT_DIR}/render/r_font.c ${PORT_DIR}/render/decode.c
+    ${PORT_DIR}/render/3ds/r_c3d.c ${PORT_DIR}/render/3ds/r_char_c3d.c ${PORT_DIR}/render/3ds/gl_shim.c
+    ${_shc}
+    ${PORT_DIR}/platform/3ds/main_3ds.c ${PORT_DIR}/platform/3ds/sys_3ds.c
+    ${PORT_DIR}/platform/3ds/movelist_3ds.c
+    ${PORT_DIR}/host/fe/fe_audio.c ${PORT_DIR}/audio/audio.c ${PORT_DIR}/audio/adx.c ${PORT_DIR}/audio/vag.c
+    ${PORT_DIR}/audio/hdbank.c ${PORT_DIR}/audio/resample.c ${PORT_DIR}/audio/synth.c ${PORT_DIR}/audio/tsd.c
+    ${PORT_DIR}/audio/wav.c)
+  set_property(TARGET mvc2_3ds PROPERTY C_STANDARD 11)
+  target_include_directories(mvc2_3ds PRIVATE "${PORT_DIR}/stubs" "${PORT_DIR}/host" "${PORT_DIR}/platform" "${GLUE}")
+  target_include_directories(mvc2_3ds SYSTEM PRIVATE ${MVC2_3DS_SYSTEM_INCLUDES})
+  target_compile_options(mvc2_3ds PRIVATE -fno-common)
+  set_source_files_properties(${PORT_DIR}/host/fe/fe_render.c ${PORT_DIR}/host/fe/fe_char.c
+    ${PORT_DIR}/host/fe/fe_mesh.c ${PORT_DIR}/host/fe/fe_audio.c PROPERTIES OBJECT_DEPENDS "${GLUE}/mvc2_host_protos.h")
+  target_link_options(mvc2_3ds PRIVATE ${MVC2_3DS_LINK_OPTIONS} "-Wl,-Map,${CMAKE_BINARY_DIR}/mvc2_3ds.map")
+  target_link_libraries(mvc2_3ds PRIVATE mvc2_game citro2d citro3d ctru m)
+  set_target_properties(mvc2_3ds PROPERTIES SUFFIX ".elf")
+  mvc2_3dsx(mvc2_3ds mvc2 "Marvel vs. Capcom 2" "PS2 decomp port")
+
+  # renderer self-test: draws a known scene, reads it back, logs PASS/FAIL (no game data)
+  add_executable(mvc2_rtest
+    ${PORT_DIR}/render/r_mesh.c ${PORT_DIR}/render/r_font.c ${PORT_DIR}/render/decode.c
+    ${PORT_DIR}/render/3ds/r_c3d.c ${PORT_DIR}/render/3ds/r_char_c3d.c ${PORT_DIR}/render/3ds/gl_shim.c
+    ${_shc} ${PORT_DIR}/platform/3ds/rtest_3ds.c)
+  set_property(TARGET mvc2_rtest PROPERTY C_STANDARD 11)
+  target_include_directories(mvc2_rtest SYSTEM PRIVATE ${MVC2_3DS_SYSTEM_INCLUDES})
+  target_link_libraries(mvc2_rtest PRIVATE citro3d ctru m)
+  set_target_properties(mvc2_rtest PROPERTIES SUFFIX ".elf")
+  mvc2_3dsx(mvc2_rtest mvc2_rtest "MvC2 renderer test" "PS2 decomp port: 3DS renderer self-test")
+
+  # sdcard/3ds/mvc2/: the folder to copy to the SD card's /3ds/ (the player
+  # adds their own disc image; both programs find it in their own folder)
+  set(_sd "${CMAKE_BINARY_DIR}/sdcard/3ds/mvc2")
+  add_custom_command(OUTPUT "${_sd}/mvc2.3dsx" "${_sd}/mvc2_boottest.3dsx" "${_sd}/mvc2_rtest.3dsx" "${_sd}/README.txt"
+                            "${_sd}/movelist.txt"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${_sd}"
+    COMMAND ${Python3_EXECUTABLE} "${PORT_DIR}/tools/make_movelist.py" "${PORT_DIR}/platform/3ds/movelist_source.txt" "${_sd}/movelist.txt"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}/mvc2.3dsx" "${_sd}/mvc2.3dsx"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}/mvc2_boottest.3dsx" "${_sd}/mvc2_boottest.3dsx"
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}/mvc2_rtest.3dsx" "${_sd}/mvc2_rtest.3dsx"
+    COMMAND ${CMAKE_COMMAND} -E copy "${PORT_DIR}/platform/3ds/README.txt" "${_sd}/README.txt"
+    DEPENDS "${CMAKE_BINARY_DIR}/mvc2.3dsx" "${CMAKE_BINARY_DIR}/mvc2_boottest.3dsx"
+            "${CMAKE_BINARY_DIR}/mvc2_rtest.3dsx" "${PORT_DIR}/platform/3ds/README.txt"
+            "${PORT_DIR}/platform/3ds/movelist_source.txt" "${PORT_DIR}/tools/make_movelist.py"
+    COMMENT "SD card folder: sdcard/3ds/mvc2")
+  add_custom_target(mvc2_3ds_sdcard ALL DEPENDS "${_sd}/mvc2.3dsx" "${_sd}/mvc2_boottest.3dsx"
+    "${_sd}/mvc2_rtest.3dsx" "${_sd}/README.txt" "${_sd}/movelist.txt")
+  # (the SDL2/GL app below is not built for the 3DS)
+  set(_app_default OFF)
+else()
+  set(_app_default ON)
+endif()
+option(MVC2_APP "build the mvc2 app (SDL2 frontend)" ${_app_default})
 if(MVC2_APP)
   set(PORT_DIR "${MVC2_ROOT}/port")
   file(GLOB MVC2_FE_SRCS CONFIGURE_DEPENDS "${PORT_DIR}/host/fe/*.c")

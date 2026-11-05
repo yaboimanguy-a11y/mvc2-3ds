@@ -23,6 +23,15 @@ typedef struct FsSource {
 int fs_source_open_file(FsSource *src, const char *path); /* 0 = ok */
 void fs_source_memory(FsSource *src, const void *data, size_t size);
 void fs_source_close(FsSource *src);
+/* Reads that reached an image file so far: calls and bytes (all sources). */
+void fs_read_stats(uint64_t *calls, uint64_t *bytes);
+/* A disc image as 2048-byte logical sectors, whatever its layout: a plain
+ * .iso, a raw .bin (2352-byte MODE1/MODE2 sectors, with or without a .cue),
+ * or a .cue (opens the data track's .bin).  0 = ok. */
+int fs_source_open_disc(FsSource *src, const char *path);
+/* Wraps src (taking ownership) so raw CD sectors read as 2048-byte ones;
+ * src unchanged if it already is.  0 = ok, -1 = no ISO9660 volume found. */
+int fs_source_cooked(FsSource *src);
 
 /* ---- ISO9660 ---- */
 typedef struct IsoFile {
@@ -72,7 +81,7 @@ typedef struct GameDisc {
     int afs_ok[4];
 } GameDisc;
 
-int disc_open(GameDisc *d, const char *iso_path); /* 0 = ok */
+int disc_open(GameDisc *d, const char *iso_path); /* .iso, .bin or .cue; 0 = ok */
 int disc_open_source(GameDisc *d, FsSource src);
 void disc_close(GameDisc *d);
 uint8_t *disc_load(GameDisc *d, int ptid, int index, size_t *size_out);

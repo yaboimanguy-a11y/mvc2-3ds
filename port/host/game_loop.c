@@ -110,14 +110,19 @@ static void cpu_hp_cap(void)
     }
 }
 
-#define STEP(name, call) do { mvc2_host_step = name; call; } while (0)
+/* called after each step when set (the 3DS runner times the boot steps) */
+void (*mvc2_step_hook)(const char *name);
+#define STEP(name, call) do { mvc2_host_step = name; call; \
+    if (mvc2_step_hook) mvc2_step_hook(name); } while (0)
 
 int mvc2_boot(int run_platform_init)
 {
     s32 r = 1;
     extern int host_fill_ee_holes(void);
+    extern void host_relocate_scratchpad_ptrs(void);
     mvc2_host_frame = -1;
-    host_fill_ee_holes();  /* EE data without C, from the disc's executable */
+    STEP("ee image (SLUS_204.86 from the disc)", host_fill_ee_holes());  /* EE data without C */
+    host_relocate_scratchpad_ptrs(); /* EE scratchpad addresses -> host array */
     {
         extern void arcade_init(void);
         arcade_init();     /* optional NAOMI tables (MVC2_ARCADE / MVC2_NAOMI) */

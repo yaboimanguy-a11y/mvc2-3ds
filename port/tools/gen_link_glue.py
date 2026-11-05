@@ -2,7 +2,7 @@
 """Symbol-resolution generator for the host link (Port G).
 
 usage:
-  gen_link_glue.py glue --out DIR --target i386|emscripten|wasm32
+  gen_link_glue.py glue --out DIR --target i386|emscripten|wasm32|arm3ds
                    [--sigs host_sigs.json] INPUT...
   gen_link_glue.py sigs --out host_sigs.json [--stub-objs DIR] WASM_OBJDIR...
   gen_link_glue.py sigs --out host_sigs.json --raw-build DIR
@@ -151,7 +151,7 @@ def gen_glue(a):
     sigs = load_sigs(a.sigs)
     func_refs = set(sigs["func_names"]) if sigs else None
     canon = L.apply_host_sig_overrides(sigs["canon"]) if sigs else {}
-    host = L.host_runtime_names()
+    host = L.host_runtime_names(a.target)
     hand = hand_stubs()
     himpl = L.host_impl()
     addrs = L.symbol_addrs()
@@ -262,7 +262,9 @@ def gen_glue(a):
     if wasm:
         D.append('#define GLUE_ALIAS(name, base, off, size) __asm__(".globl " #name "\\n.set " #name ", " #base "+" #off "\\n");')
     else:
-        D.append('#define GLUE_ALIAS(name, base, off, size) __asm__(".globl " #name "\\n.type " #name ",@object\\n.set " #name ", " #base "+" #off "\\n.size " #name ", " #size "\\n");')
+        # ARM gas reads '@' as a comment: the ELF symbol type is %object there
+        ty = "%object" if a.target == "arm3ds" else "@object"
+        D.append('#define GLUE_ALIAS(name, base, off, size) __asm__(".globl " #name "\\n.type " #name ",' + ty + '\\n.set " #name ", " #base "+" #off "\\n.size " #name ", " #size "\\n");')
     # BSS blob, sizes from neighbouring catalog addresses
     bss_size = L.BSS_END - L.BSS_START
     D.append(f"\n/* EE BSS 0x{L.BSS_START:08X}..0x{L.BSS_END:08X} (crt0 zeroes it; so does the host loader) */")
@@ -423,7 +425,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     g = sub.add_parser("glue")
     g.add_argument("--out", required=True)
-    g.add_argument("--target", required=True, choices=["i386", "emscripten", "wasm32"])
+    g.add_argument("--target", required=True, choices=["i386", "emscripten", "wasm32", "arm3ds"])
     g.add_argument("--sigs")
     g.add_argument("--allow-unresolved", action="store_true")
     g.add_argument("inputs", nargs="+")

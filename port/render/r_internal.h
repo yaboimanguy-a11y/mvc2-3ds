@@ -1,7 +1,11 @@
 /* Shared between the renderer translation units. */
 #ifndef PORT_R_INTERNAL_H
 #define PORT_R_INTERNAL_H
+#ifdef __3DS__
+#include "3ds/gl_shim.h"   /* citro3d renderer; GL names for r_mesh.c */
+#else
 #include "../platform/gl.h"
+#endif
 #include "render.h"
 
 typedef struct RVtx {

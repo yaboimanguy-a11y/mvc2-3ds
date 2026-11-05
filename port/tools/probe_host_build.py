@@ -87,8 +87,11 @@ def compile_one(src, target, outdir, use_hostify, diag=False):
         hsrc.parent.mkdir(parents=True, exist_ok=True)
         if not hsrc.exists() or hsrc.read_text(encoding="latin-1") != text:
             hsrc.write_text(text, encoding="latin-1")
-        cmd += ["-I", str(outdir / "hsrc/src"), "-I", str(outdir / "hsrc/src/data"),
-                "-I", str(srcp.parent), str(hsrc)]
+        # filtered headers before src/ (as port/CMakeLists.txt orders them):
+        # a src/data unit including a src/ header must get the filtered copy
+        at = len([compiler(target)] + TARGETS[target])
+        cmd[at:at] = ["-I", str(outdir / "hsrc/src"), "-I", str(outdir / "hsrc/src/data")]
+        cmd += ["-I", str(srcp.parent), str(hsrc)]
     else:
         cmd += [str(srcp)]
     cmd += ["-c", "-o", str(obj)]

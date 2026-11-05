@@ -4,6 +4,16 @@ keep the original semantics; hostify.transform() raises if `old` is missing
 (so a src/ change forces the override to be revisited).  Keep this list short.
 """
 OVERRIDES = {
+    # func_0035D240 tail-jumps through D_004C1B60 with its own (a, b) still in
+    # $a0/$a1; the C calls the entry with no arguments.  The entries read
+    # both (func_0035D2A0: b[0x2B8], a[4]).  R22 forwards dispatch heads whose
+    # entry block jumps; this jump is behind a test, so it is forwarded here.
+    # ARM put the jump address in r0 (= a): a[4]++ wrote into code (3DS data
+    # abort mid fight).
+    "src/wave13b.c": [
+        ("else ((void (*)(void))D_004C1B60[a[5]])();",
+         "else ((void (*)(u8 *, u8 *))D_004C1B60[a[5]])(a, b); /* host R10: tail forward */"),
+    ],
     # the destination of func_003EF980 (a byte copy, func_003DCDC0) is given
     # through the EE's uncached mirror (| 0x20000000): same RAM on the host
     # (R21 covers the pointer-cast form; this one is a plain argument)

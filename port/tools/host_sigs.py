@@ -158,6 +158,10 @@ class TypeEnv:
         if not names:
             return normalize_basic(words)
         n = names[0]
+        if n == "__builtin_va_list":
+            # a word on i386/wasm32 (int, as before), a one-word struct on
+            # ARM; ps2_compat.h defines PS2_VA_LIST for each target
+            return "PS2_VA_LIST"
         if n in self.ptr:
             return "void *"
         if n in self.agg:
@@ -203,7 +207,27 @@ def def_heads(text):
             kr = bool(sa) and all(x[0] == "ident" or x[1] == "," for x in sa) and \
                 [x[1] for x in sa] != ["void"] and not any(x[1] in BASIC_WORDS for x in sa)
             out[name] = ([t[1] for t in ret if t[0] != "ws"], split_params(args), kr)
+        elif d and term == ";" and d[2]:
+            # prototypes, for va_list parameters of macro-defined functions
+            # (newlib's _DEFUN), see canonical_va_from_proto
+            out.setdefault(PROTOS, {})[d[1]] = split_params(d[2])
     return out
+
+
+PROTOS = "\0protos"
+
+
+def canonical_va_from_proto(c, proto, env):
+    """A definition the scanner cannot parse falls back to the wasm types;
+    its own TU's prototype still names the va_list parameters, which ARM
+    passes differently (ps2_compat.h PS2_VA_LIST).  Only those change."""
+    if not proto or c.get("from") != "wasm" or len(proto) != len(c["params"]):
+        return c
+    for i, words in enumerate(proto):
+        if env.ctype(words) == "PS2_VA_LIST" and c["params"][i] == "int":
+            c = dict(c, params=list(c["params"]), **{"from": "wasm+proto(va_list)"})
+            c["params"][i] = "PS2_VA_LIST"
+    return c
 
 
 def canonical_from_def(name, wsig, head, env):
@@ -380,6 +404,8 @@ def main_sigs(a):
         if env is None:
             env = TypeEnv("", [])
         c, why = canonical_from_def(n, s, head, env)
+        if c is not None and tp is not None and head is None:
+            c = canonical_va_from_proto(c, heads[tp].get(PROTOS, {}).get(n), env)
         if c is None:
             skipped[n] = why
         else:
