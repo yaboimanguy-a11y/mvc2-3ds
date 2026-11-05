@@ -55,8 +55,14 @@ controls, saves and disc access.
    3ds/mvc2/README.txt           short version of this guide
    ```
    The release also has `mvc2.cia`, the same game as a HOME Menu app
-   (install it with FBI). The test programs and the profiler below are
-   built with the project (`build/port-3ds/sdcard/`), not released.
+   (install it with FBI). **You need one or the other, not both:** start
+   `mvc2.3dsx` from the Homebrew Launcher, or install `mvc2.cia` and start
+   it from the HOME Menu. Either way the folder above (without
+   `mvc2.3dsx` if you only use the CIA) and your disc image are needed:
+   both read the disc image, `movelist.txt`, `cacert.pem`, settings and
+   saves from `/3ds/mvc2/`, so having both is fine too. The test programs
+   and the profiler below are built with the project
+   (`build/port-3ds/sdcard/`), not released.
 
 3. **Add your disc image.** Put your disc image in that same `mvc2` folder.
    Any file name works:

@@ -14,7 +14,9 @@
 > **No game files are included.** You need your own dump of the PS2 disc
 > (NTSC-U `SLUS-20486`).
 >
-> - **Download:** [Releases](../../releases) → `mvc2-3ds-v0.2.zip` (and `mvc2.cia` for the HOME Menu)
+> - **Download:** [Releases](../../releases) → `mvc2-3ds-v0.2.zip`. Start the game from the Homebrew
+>   Launcher (`mvc2.3dsx`) **or** install `mvc2.cia` for a HOME Menu icon: one or the other, not both.
+>   Either way the zip's `/3ds/mvc2/` files and your disc image go on the SD card.
 > - **Setup, controls, building and how it works:** [port/docs/3DS.md](port/docs/3DS.md)
 >
 > Upstream project: [g-guthrie/mvc2-ps2-decomp](https://github.com/g-guthrie/mvc2-ps2-decomp).

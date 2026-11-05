@@ -19,8 +19,9 @@ NEW Nintendo 3DS / New 3DS XL / New 2DS XL ONLY (the original 3DS and
        /3ds/mvc2/Marvel vs. Capcom 2 (USA).bin
        /3ds/mvc2/Marvel vs. Capcom 2 (USA).cue
 
-3. Start the game from the Homebrew Launcher (or install mvc2.cia with FBI
-   and start it from the HOME Menu):
+3. Start the game from the Homebrew Launcher, OR install mvc2.cia (from the
+   release page) with FBI and start it from the HOME Menu.  One or the
+   other is enough; both read their files from this folder:
 
    "Marvel vs. Capcom 2" (mvc2.3dsx)
        The game on the top screen, with sound.  Sound needs the 3DS DSP
