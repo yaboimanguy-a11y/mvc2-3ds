@@ -1,4 +1,4 @@
-# Marvel vs. Capcom 2 on the Nintendo 3DS (v0.2)
+# Marvel vs. Capcom 2 on the Nintendo 3DS (v0.2.1)
 
 > **New Nintendo 3DS / New 3DS XL / New 2DS XL only.** The original 3DS,
 > 3DS XL and 2DS are too slow: the port needs the New models' 804 MHz CPU
@@ -18,7 +18,7 @@ controls, saves and disc access.
 - [Controls](#controls)
 - [The bottom screen](#the-bottom-screen)
 - [Troubleshooting](#troubleshooting)
-- [Known issues in v0.2](#known-issues-in-v02)
+- [Known issues in v0.2.1](#known-issues-in-v021)
 - [Building it yourself](#building-it-yourself)
 - [How the port works](#how-the-port-works)
 - [Credits and licenses](#credits-and-licenses)
@@ -45,7 +45,7 @@ controls, saves and disc access.
    `sdmc:/3ds/dspfirm.cdc`. If you already play other homebrew with sound,
    you already have it. Without it the game still runs, just silently.
 
-2. **Download the release.** Get `mvc2-3ds-v0.2.zip` (and `mvc2.cia` if you want a HOME Menu icon) from the
+2. **Download the release.** Get `mvc2-3ds-v0.2.1.zip` (and `mvc2.cia` if you want a HOME Menu icon) from the
    [Releases](../../../releases) page and unzip it. Inside is a folder `3ds/mvc2/`:
 
    ```
@@ -219,7 +219,7 @@ python3 port/tools/prof_symbolize.py build/port-3ds/mvc2_prof.elf mvc2_log.txt
 
 ---
 
-## Known issues in v0.2
+## Known issues in v0.2.1
 
 - **Speed.** Fights run at or near 60 fps; the busiest moments (several
   hyper combos and assists at once) can still dip into the 50s. Frame skip
@@ -255,7 +255,7 @@ on macOS or Linux. On Windows, use WSL or MSYS2.
 | **Python 3** | The port's code generators | Usually already installed |
 | **Emscripten** | Only for a build step that scans the decompiled code's function signatures. It runs a WebAssembly compile, never a 3DS one. | macOS: `brew install emscripten` · or an [emsdk](https://emscripten.org/docs/getting_started/downloads.html) checkout with `EMSDK` set |
 
-The versions used for v0.2: devkitARM r68, libctru 2.7.1, citro3d 1.7.1,
+The versions used for v0.2.1: devkitARM r68, libctru 2.7.1, citro3d 1.7.1,
 citro2d 1.7.0, picasso 2.7.2, Homebrew clang 22.1, Emscripten 6.0, CMake 4.4,
 Ninja 1.13, Python 3.
 
@@ -435,9 +435,11 @@ hold the character ID. `port/tools/make_movelist.py` turns
 
 ### Fixes in the shared port code
 
-- `port/tools/host_overrides.py`: a tail call through a function table in
-  `src/wave13b.c` is forwarded with its arguments, which fixed a crash
-  mid-fight.
+- `port/tools/host_overrides.py`: calls whose callee reads an argument the
+  PS2 left in a register (`$a1`) but the decompiled call does not pass get
+  it passed explicitly: a tail call through a function table in
+  `src/wave13b.c`, the grab / throw callback in `src/q6_x.c` (v0.2), and the
+  effect node dispatch in `src/n6.c` (v0.2.1). Each fixed a crash mid-fight.
 - `port/platform/fs.c`: BIN/CUE support, now shared by every target.
 
 ---
