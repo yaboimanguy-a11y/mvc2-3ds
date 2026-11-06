@@ -52,6 +52,8 @@ static int settings_open;            /* the settings screen instead of the list 
 static int upd_state;                /* UPD_* of update_3ds.h */
 static int st_logging, st_unlock = 1, st_unlock_active = 1;
 static char upd_line[96];
+static OnlineView ov;
+static int ov_on;
 static C3D_RenderTarget *bottom;
 static C2D_TextBuf tbuf;
 static int page_first[64];   /* first move of each page */
@@ -434,6 +436,97 @@ static void draw_settings(void)
     text(l, 14, y + 1, 0.38f, lc, 0);
 }
 
+/* ---------------- online screen ---------------- */
+#define OV_Y0 (HEAD_H + 5.f)
+#define OV_LH 16.f
+#define KEY_W 74.f
+#define KEY_H 22.f
+#define KEY_X0 10.f
+#define KEY_Y0 (HEAD_H + 50.f)
+static const char *keys[4][4] = {
+    { "1", "2", "3", "DEL" }, { "4", "5", "6", "." }, { "7", "8", "9", ":" }, { "CLR", "0", "", "" },
+};
+
+/* the buttons' boxes: one row at the bottom, or rows of two (three for
+ * five or six) without the keypad */
+static void ov_btn_box(int k, float *x, float *y, float *w, float *h)
+{
+    int n = ov.nbtn, per = (ov.keypad || n <= 2) ? n : n <= 4 ? 2 : 3, rows = (n + per - 1) / per;
+    int r = k / per, c = k % per;
+    float gap = 8.f, bw = (W - 16.f - gap * (per - 1)) / per, bh = rows >= 2 ? 26.f : 30.f;
+    float ytop = FOOT_Y - 6.f - rows * bh - (rows - 1) * 6.f;
+    *x = 8.f + c * (bw + gap);
+    *y = ytop + r * (bh + 6.f);
+    *w = bw;
+    *h = bh;
+}
+
+static void draw_online(void)
+{
+    draw_header(ov.title, 0);
+    u32 tones[5] = { c_white, c_dim, c_gold, RGB(255, 110, 100), RGB(110, 220, 140) };
+    int nl = ov.keypad ? 1 : OV_LINES;
+    for (int i = 0; i < nl; i++) {
+        if (!ov.line[i][0]) continue;
+        if (ov.line_id[i]) C2D_DrawRectSolid(6.f, OV_Y0 + i * OV_LH - 1.f, Z, W - 12.f, OV_LH - 1.f, RGBA(255, 255, 255, 26));
+        text(ov.line[i], 10.f, OV_Y0 + i * OV_LH, 0.42f, tones[ov.tone[i] % 5], 0);
+    }
+    if (ov.keypad) {
+        float ey = HEAD_H + 22.f;
+        C2D_DrawRectSolid(10.f, ey, Z, W - 20.f, 24.f, RGBA(255, 255, 255, 30));
+        C2D_DrawRectSolid(10.f, ey + 23.f, Z, W - 20.f, 1.f, c_cyan);
+        text(ov.entry[0] ? ov.entry : "_", 16.f, ey + 2.f, 0.62f, ov.entry[0] ? c_white : c_dim, 0);
+        for (int r = 0; r < 4; r++)
+            for (int c = 0; c < 4; c++) {
+                const char *k = keys[r][c];
+                if (!*k) continue;
+                float x = KEY_X0 + c * (KEY_W + 2.f), y = KEY_Y0 + r * (KEY_H + 2.f);
+                C2D_DrawRectSolid(x, y, Z, KEY_W, KEY_H, (c >= 3 || (r == 3 && c == 0)) ? RGB(60, 56, 92) : RGB(46, 44, 72));
+                text(k, x + KEY_W / 2 - text_w(k, 0.5f) / 2, y + 2.f, 0.5f, c_white, 0);
+            }
+    }
+    for (int k = 0; k < ov.nbtn; k++) {
+        float x, y, w, h;
+        ov_btn_box(k, &x, &y, &w, &h);
+        C2D_DrawRectSolid(x, y, Z, w, h, ov.btn_tone[k] ? RGB(120, 36, 160) : RGB(52, 50, 84));
+        C2D_DrawRectSolid(x, y, Z, w, 1.f, RGBA(255, 255, 255, 70));
+        text(ov.btn[k], x + w / 2 - text_w(ov.btn[k], 0.5f) / 2, y + h / 2 - 8.f, 0.5f, c_white, 0);
+    }
+}
+
+static int online_touch_at(int x, int y)
+{
+    if (!ov.keypad && y >= OV_Y0) {
+        int i = (int)((y - OV_Y0 + 1.f) / OV_LH);
+        if (i >= 0 && i < OV_LINES && ov.line_id[i] && ov.line[i][0]) {
+            float bx, by, bw, bh;
+            ov_btn_box(0, &bx, &by, &bw, &bh);
+            if (y < by - 4) return MOVELIST_ONLINE + ov.line_id[i];
+        }
+    }
+    for (int k = 0; k < ov.nbtn; k++) {
+        float bx, by, bw, bh;
+        ov_btn_box(k, &bx, &by, &bw, &bh);
+        if (x >= bx && x < bx + bw && y >= by - 2 && y < by + bh + 2) return MOVELIST_ONLINE + ov.btn_id[k];
+    }
+    if (ov.keypad && x >= KEY_X0 && y >= KEY_Y0) {
+        int c = (int)((x - KEY_X0) / (KEY_W + 2.f)), r = (int)((y - KEY_Y0) / (KEY_H + 2.f));
+        if (c < 4 && r < 4 && *keys[r][c]) {
+            const char *k = keys[r][c];
+            int ch = !strcmp(k, "DEL") ? '<' : !strcmp(k, "CLR") ? '#' : k[0];
+            return MOVELIST_ONLINE_KEY + ch;
+        }
+    }
+    return 0;
+}
+
+void movelist_online(const OnlineView *v)
+{
+    if (v) ov = *v;
+    ov_on = v != NULL;
+    dirty = 1;
+}
+
 static void draw_moves(const Entry *e)
 {
     draw_header(e->name, nteam > 1);
@@ -541,6 +634,7 @@ int movelist_render(void)
     C2D_SceneBegin(bottom);
     C2D_DrawRectangle(0, 0, 0.1f, W, 240, c_bg0, c_bg0, c_bg1, c_bg1);
     if (settings_open) draw_settings();
+    else if (ov_on) draw_online();
     else if (shown >= 0) draw_moves(&tab[shown]);
     else draw_help();
     draw_footer();
@@ -617,6 +711,11 @@ int movelist_touch(int x, int y)
         if (upd_state == UPD_BUSY) return 0;
         return upd_state == UPD_AVAILABLE ? MOVELIST_UPDATE_INSTALL : MOVELIST_UPDATE_CHECK;
     }
+    if (ov_on) {
+        int c = online_touch_at(x, y);
+        if (c) dirty = 1;
+        return c;
+    }
     if (!loaded) return 0;
     if (y < HEAD_H) {
         if (nteam > 0) {
@@ -636,3 +735,4 @@ int movelist_touch(int x, int y)
 }
 
 void movelist_redraw(void) { dirty = 1; }
+int movelist_dirty(void) { return ui_ok && dirty; }

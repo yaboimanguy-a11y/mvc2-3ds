@@ -1,0 +1,13 @@
+# The online lobby directory (worker.js).  Deploy: see README.md here.
+name = "mvc2-lobby"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[[durable_objects.bindings]]
+name = "LOBBY"
+class_name = "Lobby"
+
+# Durable Objects on the Workers Free plan: SQLite-backed classes
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Lobby"]

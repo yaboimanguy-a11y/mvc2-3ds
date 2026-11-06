@@ -356,6 +356,7 @@ if(MVC2_3DS)
     ${_shc}
     ${PORT_DIR}/platform/3ds/main_3ds.c ${PORT_DIR}/platform/3ds/sys_3ds.c
     ${PORT_DIR}/platform/3ds/movelist_3ds.c ${PORT_DIR}/platform/3ds/update_3ds.c ${PORT_DIR}/platform/3ds/settings_3ds.c
+    ${PORT_DIR}/platform/3ds/online_3ds.c ${PORT_DIR}/platform/3ds/lobby_3ds.c ${PORT_DIR}/platform/net/room.c
     ${PORT_DIR}/host/fe/fe_audio.c ${PORT_DIR}/audio/audio.c ${PORT_DIR}/audio/adx.c ${PORT_DIR}/audio/vag.c
     ${PORT_DIR}/audio/hdbank.c ${PORT_DIR}/audio/resample.c ${PORT_DIR}/audio/synth.c ${PORT_DIR}/audio/tsd.c
     ${PORT_DIR}/audio/wav.c)
@@ -365,22 +366,26 @@ if(MVC2_3DS)
   # repository whose releases it installs, and libcurl + mbedTLS from the
   # devkitPro portlibs (dkp-pacman -S 3ds-curl); without them the settings
   # screen's update button only says so
-  set(MVC2_VERSION "0.2.1" CACHE STRING "version of the 3DS app (compared with the release tags, v0.2.1)")
+  set(MVC2_VERSION "0.2.5" CACHE STRING "version of the 3DS app (compared with the release tags, v0.2.5)")
   set(MVC2_UPDATE_REPO "yaboimanguy-a11y/mvc2-3ds" CACHE STRING "GitHub owner/repo the updater reads releases from")
   set(_portlibs "${DEVKITPRO}/portlibs/3ds")
   set(MVC2_UPDATER_DEFS MVC2_VERSION="${MVC2_VERSION}" MVC2_UPDATE_REPO="${MVC2_UPDATE_REPO}")
+  # online VS: the lobby directory (port/server/lobby, a Cloudflare Worker);
+  # empty = rooms joined by address only (sdmc:/3ds/mvc2/lobby_url.txt can set it)
+  set(MVC2_LOBBY_URL "https://mvc2-lobby.yaboimanguy.workers.dev" CACHE STRING "online lobby address (port/server/lobby)")
+  list(APPEND MVC2_UPDATER_DEFS MVC2_LOBBY_URL="${MVC2_LOBBY_URL}")
   set(MVC2_UPDATER_LIBS "")
   if(EXISTS "${_portlibs}/lib/libcurl.a" AND EXISTS "${_portlibs}/lib/libmbedtls.a")
     list(APPEND MVC2_UPDATER_DEFS MVC2_HAVE_CURL=1)
     set(MVC2_UPDATER_LIBS "${_portlibs}/lib/libcurl.a" "${_portlibs}/lib/libmbedtls.a"
       "${_portlibs}/lib/libmbedx509.a" "${_portlibs}/lib/libmbedcrypto.a" "${_portlibs}/lib/libz.a")
-    set_source_files_properties(${PORT_DIR}/platform/3ds/update_3ds.c PROPERTIES
+    set_source_files_properties(${PORT_DIR}/platform/3ds/update_3ds.c ${PORT_DIR}/platform/3ds/lobby_3ds.c PROPERTIES
       INCLUDE_DIRECTORIES "${_portlibs}/include")
   else()
     message(WARNING "3ds-curl not installed (dkp-pacman -S 3ds-curl): the app is built without its updater")
   endif()
   set_source_files_properties(${PORT_DIR}/platform/3ds/update_3ds.c ${PORT_DIR}/platform/3ds/movelist_3ds.c ${PORT_DIR}/platform/3ds/main_3ds.c
-    PROPERTIES COMPILE_DEFINITIONS "${MVC2_UPDATER_DEFS}")
+    ${PORT_DIR}/platform/3ds/lobby_3ds.c PROPERTIES COMPILE_DEFINITIONS "${MVC2_UPDATER_DEFS}")
   add_executable(mvc2_3ds ${MVC2_3DS_APP_SRCS}
     $<TARGET_OBJECTS:mvc2_host_core> $<TARGET_OBJECTS:mvc2_game_data>)
   set_property(TARGET mvc2_3ds PROPERTY C_STANDARD 11)

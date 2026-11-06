@@ -53,6 +53,25 @@ NEW Nintendo 3DS / New 3DS XL / New 2DS XL ONLY (the original 3DS and
        little slower with 3D on.
        L + R + START + SELECT: quit.
 
+ONLINE VS: "VS" on the main menu plays against other New 3DS consoles
+over Wi-Fi (one player per console).  The bottom screen shows:
+   Find rooms      the public rooms; tap one to join
+   Create room     host one: 1v1 or King of the Hill, public or private;
+                   the room screen shows its 6-digit code
+   Join code       a room's code (or the host's IP address)
+   Leaderboard     everyone's online ratings and your rank (also on the
+                   web: mvc2-lobby.yaboimanguy.workers.dev); keep
+                   online_id.txt to keep your rating
+   Sync test       one console: checks that a match stays in sync
+Up to 8 per room; whoever isn't playing watches.  1v1: the host and the
+first to join play, with rematches.  King of the Hill: the winner stays on,
+the next in line challenges.  The host taps Start.  Everyone needs the same
+app version and the same game disc.  Every press is delayed 3 frames
+(50 ms); with a ping over about 60 ms the game slows down.  Matches use an
+empty online card (mvc2_memcard_online) with everything unlocked; your own
+save is not touched.  If it says "Out of sync", send mvc2_log.txt and the
+mvc2_desync_*.bin files.
+
 With logging on (settings), the game writes mvc2_log.txt in this folder,
 replaced on every run: what happened, and every second the frame rate and
 where each frame's time went ("time:" and "steps:" lines).  If the game

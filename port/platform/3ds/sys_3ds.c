@@ -1,6 +1,7 @@
 /* Shared pieces of the 3DS programs (see sys_3ds.h). */
 #include <3ds.h>
 #include <ctype.h>
+#include <malloc.h>
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -270,4 +271,31 @@ void sys3ds_fpu_ps2_mode(void)
     set_fpscr((before & ~0x03C00000u) | 0x03C00000u);
     printf("fpu: FPSCR %08lX -> %08lX (round toward zero, flush to zero)\n",
            (unsigned long)before, (unsigned long)get_fpscr());
+}
+
+/* ---- network (SOC) ------------------------------------------------------
+ * The updater's thread and online play both use sockets; socInit may run
+ * only once at a time. */
+static LightLock soc_lk = 1;   /* LightLock_Init state */
+static int soc_refs;
+static u32 *soc_buf;
+
+int sys3ds_soc_acquire(void)
+{
+    int r = 0;
+    LightLock_Lock(&soc_lk);
+    if (soc_refs == 0) {
+        if (!soc_buf) soc_buf = (u32 *)memalign(0x1000, 0x100000);
+        if (!soc_buf || R_FAILED(socInit(soc_buf, 0x100000))) r = -1;
+    }
+    if (r == 0) soc_refs++;
+    LightLock_Unlock(&soc_lk);
+    return r;
+}
+
+void sys3ds_soc_release(void)
+{
+    LightLock_Lock(&soc_lk);
+    if (soc_refs > 0 && --soc_refs == 0) socExit();
+    LightLock_Unlock(&soc_lk);
 }

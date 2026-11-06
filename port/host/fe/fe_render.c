@@ -449,6 +449,20 @@ static void fe_flip(void)
     fl_frame_flip();
 }
 
+/* After mvc2_restart (port/host/game_restart.c): forget what the texture
+ * and palette records were (the frame numbers start again), release the
+ * character banks and clay meshes the game made. */
+void fe_char_reset(void);
+void fe_mesh_reset(void);
+void fe_restart(void)
+{
+    memset(tsync, 0, sizeof tsync);
+    memset(psync, 0, sizeof psync);
+    memset(fe_cnt, 0, sizeof fe_cnt);
+    fe_char_reset();
+    fe_mesh_reset();
+}
+
 void fe_render_init(void)
 {
     fl_set_flip_clear(1);

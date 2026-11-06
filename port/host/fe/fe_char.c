@@ -33,6 +33,14 @@ static void slot_free(int i)
     memset(&S[i], 0, sizeof S[i]);
 }
 
+/* fe_restart: every slot's bank released (the game registers them again) */
+void fe_char_reset(void)
+{
+    int i;
+    for (i = 0; i < 16; i++)
+        slot_free(i);
+}
+
 int func_00411C10(void *a, int mode)
 {
     int n = func_00411C10__game(a, mode);

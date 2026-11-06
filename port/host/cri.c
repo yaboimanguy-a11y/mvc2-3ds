@@ -241,6 +241,17 @@ static struct {
     int created, stat, paused, vol, mono, ptid, fid, ticks;
 } adxt;
 
+/* game_restart.c: no ADXF handles, partitions unloaded, music stopped (the
+ * disc stays open) */
+void host_cri_reset(void)
+{
+    if (host_adxt_ops && host_adxt_ops->stop)
+        host_adxt_ops->stop();
+    memset(adxf, 0, sizeof adxf);
+    memset(pt_stat, 0, sizeof pt_stat);
+    memset(&adxt, 0, sizeof adxt);
+}
+
 void *func_00401150(int maxch, int work, int worksize) /* ADXT_Create */
 {
     (void)maxch; (void)work; (void)worksize;

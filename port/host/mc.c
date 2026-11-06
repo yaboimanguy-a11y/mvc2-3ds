@@ -39,6 +39,19 @@ static int pend_cmd, pend_res, pend_valid;
 static int info_calls;
 static char mc_cwd[128] = "/";
 
+/* game_restart.c: no open files, no pending request, a "new" card */
+void host_mc_reset(void)
+{
+    int i;
+    for (i = 0; i < MC_FD_MAX; i++)
+        if (mc_fd[i].used && mc_fd[i].f)
+            fclose(mc_fd[i].f);
+    memset(mc_fd, 0, sizeof mc_fd);
+    pend_cmd = pend_res = pend_valid = 0;
+    info_calls = 0;
+    strcpy(mc_cwd, "/");
+}
+
 static const char *mc_root(void)
 {
     const char *e = getenv("MVC2_MEMCARD");

@@ -12,6 +12,10 @@ static uint8_t buf[0x200];/* D_00634100 */
 static int cursor;        /* D_00633E18 */
 static TsdcSink S;
 static int ready;         /* D_004C2BB4 */
+#define TOKENS 64
+static const void *tok[TOKENS];
+static uint32_t tok_size[TOKENS];
+static int tok_next;
 
 static uint8_t b4(const Entry *e) { return (uint8_t)e->w1; }
 static uint8_t b5(const Entry *e) { return (uint8_t)(e->w1 >> 8); }
@@ -26,6 +30,16 @@ void tsdc_reset(void)                                   /* 0x422CC0 */
     head = 0;
     tail = 0;
     for (int i = 0; i < 64; i++) Q[i].w0 = -1;
+}
+
+/* port/host/game_restart.c: as before the game's sound init (the sink stays) */
+void tsdc_restart(void)
+{
+    tsdc_reset();
+    ready = 0;
+    tok_next = 0;
+    memset(tok, 0, sizeof tok);
+    memset(tok_size, 0, sizeof tok_size);
 }
 
 int tsdc_init(void)                                     /* 0x422DB0 (+ 0x419F70 tail) */
@@ -233,11 +247,7 @@ int tsdc_queue_used(void)
     return n;
 }
 
-/* ---- host pointers for cmd 0x4D on 64-bit builds ---- */
-#define TOKENS 64
-static const void *tok[TOKENS];
-static uint32_t tok_size[TOKENS];
-static int tok_next;
+/* ---- host pointers for cmd 0x4D on 64-bit builds (tok, above) ---- */
 
 uint32_t tsdc_addr(const void *p, uint32_t size)
 {

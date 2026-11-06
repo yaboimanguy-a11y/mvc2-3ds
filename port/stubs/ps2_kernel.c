@@ -9,6 +9,7 @@
  * (logged; the first such hit names the caller that needs a real thread).
  */
 #include <stdio.h>
+#include <string.h>
 #include "mvc2_stubs.h"
 
 /* ps2sdk ee_sema_t */
@@ -16,6 +17,14 @@ struct ee_sema { int count, max_count, init_count, wait_threads; unsigned attr, 
 
 #define MAX_SEMA 256
 static struct { int used, count, max; } sema[MAX_SEMA];
+static int eie = 1;
+
+/* port/host/game_restart.c: no semaphores, interrupts enabled */
+void ps2_kernel_reset(void)
+{
+    memset(sema, 0, sizeof sema);
+    eie = 1;
+}
 
 /* CreateSema (syscall 0x40) */
 int func_00103DE0(struct ee_sema *p)
@@ -94,8 +103,7 @@ int func_001048B0(void)
     return 0;
 }
 
-/* Interrupt-enable state behind DI()/EI(): Status.EIE (bit 16). */
-static int eie = 1;
+/* Interrupt-enable state behind DI()/EI(): Status.EIE (bit 16): eie, above. */
 
 /* EI() wrapper: sets EIE, returns its previous value. */
 int func_0010CA68(void)

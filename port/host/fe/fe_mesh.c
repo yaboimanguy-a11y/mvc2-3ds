@@ -59,6 +59,18 @@ static void cmap_free(int h)
     memset(&cmap[h], 0, sizeof cmap[h]);
 }
 
+/* fe_restart: every clay mesh released (the game builds them again) */
+void fe_mesh_reset(void)
+{
+    int h;
+    for (h = 1; h < MAX_CLAY; h++) {
+        cmap_free(h);
+        fl_clay_release(h);
+        clay_chunk[h] = 0;
+    }
+    last_chunk = 0;
+    last_clay = 0;
+}
 
 /* copy the packet's vertices into the GL mesh's CPU copy; returns the
  * number of vertices that differed */

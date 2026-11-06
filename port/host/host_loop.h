@@ -16,4 +16,19 @@ extern void (*host_present_hook)(void);
 extern unsigned long host_frame_count;
 extern int mvc2_unlock_all; /* "unlock everything", default 1 */
 extern void (*mvc2_step_hook)(const char *name); /* after each STEP when set */
+
+/* game_restart.c: the game back to its power-on state (then mvc2_boot(1)
+ * again; the frontend resets its own caches: fe_restart), and fingerprints
+ * of the game's memory for online play */
+typedef struct MvcHashSlice { int slice; unsigned int heap_lo, heap_hi; } MvcHashSlice;
+int mvc2_can_restart(void);
+int mvc2_restart(void);
+unsigned int mvc2_state_hash_frame(long frame, MvcHashSlice *where);
+void mvc2_state_hash_regions(unsigned int out[4]);   /* data, bss, scratchpad, heap */
+const char *mvc2_state_region_name(int r);
+int mvc2_state_dump(const char *path, long frame, unsigned int heap_lo, unsigned int heap_hi);
+/* iop.c: the RTC the game reads is host_clock_epoch (UTC seconds) plus the
+ * game's frames when host_clock_fixed (both consoles read the same time) */
+extern int host_clock_fixed;
+extern long long host_clock_epoch;
 #endif

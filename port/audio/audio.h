@@ -26,6 +26,8 @@ typedef uint8_t *(*AudioAfsLoader)(void *ctx, int ptid, int fid, size_t *size);
 
 int audio_init(int open_device);         /* 0 = ok; open_device 0 = headless */
 void audio_shutdown(void);
+void audio_restart(void);               /* no banks, voices or music (game restart) */
+void audio_set_deterministic(int on);   /* sound status answers that do not depend on timing */
 void audio_set_loader(AudioAfsLoader fn, void *ctx);
 void audio_set_paused(int paused);       /* PlatApp.on_pause */
 int audio_device_rate(void);             /* 0 when headless */

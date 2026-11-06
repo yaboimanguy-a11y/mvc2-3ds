@@ -25,6 +25,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #include "update_3ds.h"
+#include "sys_3ds.h"
+void lobby_curl_global(void);
 
 #ifndef MVC2_VERSION
 #define MVC2_VERSION "0.0"
@@ -320,17 +322,14 @@ static void do_install(void)
 static void thread_main(void *arg)
 {
     (void)arg;
-    static u32 *soc_buf;
-    if (!soc_buf) soc_buf = (u32 *)memalign(0x1000, 0x100000);
-    if (!soc_buf || socInit(soc_buf, 0x100000)) {
+    if (sys3ds_soc_acquire()) {
         set(UPD_ERROR, "Network start failed");
         return;
     }
-    curl_global_init(CURL_GLOBAL_DEFAULT);
+    lobby_curl_global();   /* curl's global state, shared with the lobby (lobby_3ds.c) */
     if (want_install) do_install();
     else do_check();
-    curl_global_cleanup();
-    socExit();
+    sys3ds_soc_release();
 }
 
 static void start(int install)

@@ -15,6 +15,11 @@
 #include <string.h>
 #include "host.h"
 #include "host_cri.h"
+#include "inflate.h"
+
+/* CRC-32 of the disc's SLUS_204.86 (online play: both consoles must have
+ * the same game) */
+u32 host_ee_elf_crc;
 
 extern const unsigned int mvc2_ee_holes[][2];
 extern const int mvc2_ee_nholes;
@@ -70,6 +75,7 @@ int host_fill_ee_holes(void)
         }
         filled += (int)n;
     }
+    host_ee_elf_crc = host_crc32(0, elf, size);
     free(elf);
     host_log("ee image: %d bytes of EE data without C filled from SLUS_204.86 (%d EE pointers left zero)",
              filled, ptrs);

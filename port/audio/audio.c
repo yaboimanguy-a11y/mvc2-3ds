@@ -90,9 +90,17 @@ static void sink_rpc(void *ctx, const uint8_t *buf, size_t n)
     audio_unlock();
 }
 
+/* online play (port/platform/3ds/online_3ds.c): the game asks whether a
+ * voice still plays only to stop it if so (func_001E59E0); the mixer's
+ * answer depends on how far it got in real time, which differs between two
+ * consoles.  "Playing" always: the stop of a finished voice does nothing. */
+static int status_fixed;
+void audio_set_deterministic(int on) { status_fixed = on; }
+
 static int sink_status(void *ctx, int fno, uint32_t arg)
 {
     (void)ctx;
+    if (status_fixed && (fno & 0xFF) == 4) return 1;
     audio_lock();
     int r = tsd_status(&A.tsd, fno, arg);
     audio_unlock();
@@ -536,6 +544,25 @@ void audio_set_paused(int paused)
 }
 
 void audio_set_loader(AudioAfsLoader fn, void *ctx) { A.loader = fn; A.loader_ctx = ctx; }
+
+/* port/host/game_restart.c: the sound engine as before the game's sound
+ * init (no banks, no voices, no music); the device keeps running */
+void audio_restart(void)
+{
+    if (!A.init) return;
+    audio_lock();
+    bgm_free(&A.bgm);
+    A.bgm.loop = 1;
+    A.bgm.paused = 0;
+    A.bgm.mono = 0;
+    A.bgm.carry = 0;
+    A.bgm.vol = 0;
+    A.bgm.gain = A.bgm.cur = 1.0f;
+    tsd_shutdown(&A.tsd);
+    tsd_init(&A.tsd);
+    A.tsd.resolve = tsdc_resolve;
+    audio_unlock();
+}
 
 int audio_init(int open_device)
 {

@@ -63,35 +63,66 @@ void host_log(const char *fmt, ...)
  * (EndOfHeap).  newlib malloc (the game's own, func_0011CE68) grows it with
  * this; the first request is flInitialize's 22 MB arena. */
 #define HOST_EE_HEAP (28u << 20)
-static u8 *ee_heap, *ee_brk;
+/* The heap's base is aligned to 64 KB, so the game's own alignments of the
+ * blocks it carves (64 bytes .. 4 KB) give the same layout whatever address
+ * the host's allocator returned: two consoles in an online match
+ * (port/platform/3ds/net_3ds.c) then build the same heap. */
+#define HOST_EE_HEAP_ALIGN 0x10000u
+static u8 *ee_heap, *ee_brk, *ee_brk_max;
+static u8 *ee_heap_base(void)
+{
+    return (u8 *)(((uintptr_t)ee_heap + HOST_EE_HEAP_ALIGN - 1) & ~(uintptr_t)(HOST_EE_HEAP_ALIGN - 1));
+}
 
 void *func_001044E0(int increment)
 {
     u8 *old;
     if (!ee_heap) {
-        ee_heap = (u8 *)calloc(1, HOST_EE_HEAP + 64);
+        ee_heap = (u8 *)calloc(1, HOST_EE_HEAP + HOST_EE_HEAP_ALIGN);
         if (!ee_heap)
             return (void *)-1;
-        ee_brk = (u8 *)(((uintptr_t)ee_heap + 63) & ~(uintptr_t)63);
+        ee_brk = ee_heap_base();
     }
-    if (increment < 0 ? (size_t)-increment > (size_t)(ee_brk - ee_heap)
-                      : (size_t)increment > (size_t)(ee_heap + HOST_EE_HEAP - ee_brk))
+    if (increment < 0 ? (size_t)-increment > (size_t)(ee_brk - ee_heap_base())
+                      : (size_t)increment > (size_t)(ee_heap_base() + HOST_EE_HEAP - ee_brk))
         return (void *)-1;
     old = ee_brk;
     ee_brk += increment;
+    if (ee_brk > ee_brk_max)
+        ee_brk_max = ee_brk;
     return old;
 }
 
 /* the first break (EE 0x00634380, the end of the BSS): state_dump.c */
 u8 *host_ee_heap_base(void)
 {
-    return ee_heap ? (u8 *)(((uintptr_t)ee_heap + 63) & ~(uintptr_t)63) : NULL;
+    return ee_heap ? ee_heap_base() : NULL;
+}
+
+/* the heap in use (from the base to the break) */
+size_t host_ee_heap_used(void)
+{
+    return ee_heap ? (size_t)(ee_brk - ee_heap_base()) : 0;
+}
+
+static u8 host_dmac[10][0x100] __attribute__((aligned(16)));
+
+/* game_restart.c: the heap empty and zero, as at power-on (the same block
+ * is kept: its address stays the same) */
+void host_boot_reset(void)
+{
+    if (ee_heap) {
+        u8 *top = ee_brk_max > ee_brk ? ee_brk_max : ee_brk;
+        memset(ee_heap_base(), 0, (size_t)(top - ee_heap_base()));
+        ee_brk = ee_brk_max = ee_heap_base();
+    }
+    memset(host_dmac, 0, sizeof host_dmac);
+    host_frame_count = 0;
 }
 
 /* ---- DMA channels (sceDmaGetChan results) -----------------------------
  * The render library writes CHCR-ish fields of the channel struct before a
- * send (func_003DC720).  Plain memory on the host. */
-static u8 host_dmac[10][0x100] __attribute__((aligned(16)));
+ * send (func_003DC720).  Plain memory on the host (host_dmac, above). */
 
 s32 func_003EC160(void)
 {

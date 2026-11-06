@@ -14,6 +14,7 @@
 extern int func_00103E20(int);
 static int thread_ids = 1;
 static int next_thread(void) { return ++thread_ids; }
+void host_kernel_reset(void) { thread_ids = 1; } /* game_restart.c */
 
 int func_00100580(void) { return 0; } /* 128: kernel call 128 */
 int func_001039E0(void) { return 0; } /* 2: SetGsCrt */

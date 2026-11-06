@@ -18,6 +18,13 @@
 >   Launcher (`mvc2.3dsx`) **or** install `mvc2.cia` for a HOME Menu icon: one or the other, not both.
 >   Either way the zip's `/3ds/mvc2/` files and your disc image go on the SD card.
 > - **Setup, controls, building and how it works:** [port/docs/3DS.md](port/docs/3DS.md)
+> - **Experimental: v0.2.5** (pre-release, online VS): [Releases](../../releases) → `mvc2-3ds-v0.2.5.zip`.
+>   The in-app updater stays on the stable release.
+> - **Online VS (in development):** VS on the main menu plays against
+>   other New 3DS consoles over Wi-Fi: public and private rooms, 1v1 and
+>   King of the Hill, spectators
+>   ([port/docs/3DS.md#online-vs-in-development](port/docs/3DS.md#online-vs-in-development);
+>   lobby server: [port/server/lobby](port/server/lobby/README.md))
 >
 > Upstream project: [g-guthrie/mvc2-ps2-decomp](https://github.com/g-guthrie/mvc2-ps2-decomp).
 > Everything below is the upstream README.

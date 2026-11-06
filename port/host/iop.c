@@ -77,6 +77,15 @@ void host_pad_set(int port, const PadRaw *p)
     host_pads_q[port][0] = *p;
 }
 
+/* game_restart.c: no buttons held, nothing queued */
+void host_iop_reset(void)
+{
+    memset(host_rpc_server, 0, sizeof host_rpc_server);
+    memset(host_pads, 0, sizeof host_pads);
+    memset(host_pads_set, 0, sizeof host_pads_set);
+    memset(host_pads_q, 0, sizeof host_pads_q);
+}
+
 unsigned host_pad_buttons(int port)
 {
     return host_pads_set[port & 1].buttons;
@@ -172,14 +181,25 @@ int func_0010D910(int port, int slot, void *buf)
     return 32;
 }
 
-/* ---- RTC: sceCdReadClock ------------------------------------------------ */
+/* ---- RTC: sceCdReadClock ------------------------------------------------
+ * host_clock_fixed (online play, port/platform/3ds/net_3ds.c): the clock is
+ * host_clock_epoch (UTC, agreed by both consoles) plus the game's frames,
+ * so both games read the same time on the same frame. */
 static u8 bcd(int v) { return (u8)(((v / 10) << 4) | (v % 10)); }
+int host_clock_fixed;
+long long host_clock_epoch;
 
 int func_0010FC98(void *clock)
 {
     u8 *c = (u8 *)clock;
     time_t t = time(0);
-    struct tm *tm = localtime(&t);
+    struct tm *tm;
+    if (host_clock_fixed) {
+        t = (time_t)(host_clock_epoch + (long long)(host_frame_count / 60));
+        tm = gmtime(&t);
+    } else {
+        tm = localtime(&t);
+    }
     c[0] = 0;
     c[1] = bcd(tm->tm_sec);
     c[2] = bcd(tm->tm_min);

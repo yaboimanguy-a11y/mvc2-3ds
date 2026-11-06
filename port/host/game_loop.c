@@ -115,12 +115,17 @@ void (*mvc2_step_hook)(const char *name);
 #define STEP(name, call) do { mvc2_host_step = name; call; \
     if (mvc2_step_hook) mvc2_step_hook(name); } while (0)
 
+static int last_state = -1;
+
 int mvc2_boot(int run_platform_init)
 {
     s32 r = 1;
     extern int host_fill_ee_holes(void);
     extern void host_relocate_scratchpad_ptrs(void);
+    extern void mvc2_pristine_capture(void);
+    mvc2_pristine_capture(); /* the first boot: the EE data as linked (game_restart.c) */
     mvc2_host_frame = -1;
+    last_state = -1;
     STEP("ee image (SLUS_204.86 from the disc)", host_fill_ee_holes());  /* EE data without C */
     host_relocate_scratchpad_ptrs(); /* EE scratchpad addresses -> host array */
     {
@@ -140,8 +145,6 @@ int mvc2_boot(int run_platform_init)
     mvc2_host_frame = 0;
     return r;
 }
-
-static int last_state = -1;
 
 void mvc2_frame(void)
 {

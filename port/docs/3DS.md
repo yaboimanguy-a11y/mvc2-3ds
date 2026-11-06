@@ -168,6 +168,87 @@ app's folder.
 The list comes from `movelist.txt` in the app folder, a plain text file
 you can edit. The format is described at the top of the file.
 
+## Online VS (in development)
+
+**VS** on the main menu is online play against other New 3DS consoles,
+one player per console, over Wi-Fi. Choosing VS opens the **Online VS**
+screen on the bottom screen instead of the local two-player mode:
+
+| Button | Does |
+| --- | --- |
+| **Find rooms** | The public rooms: name, mode, players. Tap one to join. |
+| **Create room** | Host a room: **Mode** 1v1 or King of the Hill, **Public** (listed in Find rooms) or **Private** (joined with its code). The room screen shows its 6-digit **code**. |
+| **Join code** | Type a room's 6-digit code (or a host's IP address) on the keypad. |
+| **Leaderboard** | The ratings of everyone who played online, and your rank. |
+| **Sync test** | One console: checks that it keeps a match in sync (see below). |
+
+**Modes.** Up to 8 people per room; whoever isn't playing watches the
+match live on their own 3DS.
+- **1v1:** the host and the first player to join play VS, with rematches
+  until one of them leaves; anyone else in the room watches.
+- **King of the Hill:** two play; the winner stays on, the loser goes to
+  the back of the line, the next in line challenges. Wins are counted on
+  the room screen (`*` host, `+` next in line, `>` you).
+
+The host taps **Start** when at least two are in the room. Everyone in the
+room then restarts the game into VS's character select (a few seconds);
+the next King of the Hill round starts by itself 6 seconds after a fight
+ends. **Leave** takes you out of the room (the host leaving closes it).
+
+**Leaderboard.** After every fight, both players' consoles report the
+result to the lobby server, and it counts only when the two reports agree.
+Each counted fight moves both players' ratings (Elo, starting at 1000) and
+their wins, losses, draws and best win streak. The Leaderboard screen shows
+the top players and your rank; the same list is a web page at
+<https://mvc2-lobby.yaboimanguy.workers.dev>. Your player id and its secret
+key are made once and kept in `/3ds/mvc2/online_id.txt`: keep that file
+(copy it to a new SD card) to keep your rating. The same two players count
+at most 20 times a day.
+
+**How it connects.** A room is hosted by the host's 3DS: the matches go
+directly between the consoles. A small lobby server (a free Cloudflare
+Worker, `port/server/lobby/`) only lists the public rooms, turns codes into
+addresses, and tells the host who is joining so both consoles send to each
+other at once, which gets through most home routers without port
+forwarding. When two players can't reach each other directly, the room's
+host passes their inputs on. To learn its internet address, each 3DS asks a
+public STUN server (`stun.l.google.com`) once; nothing else is sent there.
+Without a lobby address (see `port/server/lobby/README.md`) rooms can still
+be joined by the host's IP address (the room screen shows the same-Wi-Fi
+one; over the internet the host's router must forward UDP port 27886).
+
+Everyone needs **the same app build** (the same release file) and **the
+same game disc** (the US disc, SLUS-20486); a room refuses others and says
+which one differs.
+
+**How a match runs.** Each console restarts the game to its power-on state,
+with an empty online memory card (`mvc2_memcard_online/`, your own save is
+not touched), every character unlocked and the same clock. All of them boot
+through the title and the main menu into VS on their own, in fast forward
+with the sound off, and from the character select they run the same frames
+with the same two pads. Every press is delayed by a fixed **3 frames
+(50 ms)**, which covers a round trip of up to about 60 ms with no slowdown;
+over a slower connection the game slows down (about 51 fps at a 100 ms
+ping, 34 fps at 160 ms) instead of skipping ahead. The ping shows on the
+room screen and in the footer. The result of each fight is read from the
+game (the side with characters left standing, or with more health at time
+over). When you leave the room after playing, the game restarts once more
+for normal play with your own save.
+
+**Sync test.** Online play only works if every console computes exactly
+the same game. The sync test checks that on one console: it restarts the
+game, boots into VS and plays 50 seconds of random presses for both
+players, then does all of it again and compares a fingerprint of the
+game's memory on every frame. It takes about two minutes and then says
+*passed* or *failed*. Please run it once and report the result.
+
+**If a match goes out of sync**, the room screen says *Out of sync at frame
+N*, the consoles involved write `mvc2_desync_m<member>_f<frame>.bin` (the
+game's memory at the same frame) next to the app, and the log has the
+details. Please send those files and `mvc2_log.txt` from both consoles (turn
+logging on in the settings first). A failed sync test writes
+`mvc2_synctest_run2.bin` and `mvc2_synctest_run3.bin` the same way.
+
 ---
 
 ## Troubleshooting
@@ -425,6 +506,38 @@ Reads `.iso` (2048-byte sectors) and raw `.bin` images (2352-byte Mode 1/2,
 2336-byte) by stripping the sector headers on the fly. Reads are batched 32
 sectors at a time through a 64 KB buffer, because small SD reads on the 3DS
 are slow. `.cue` sheets are parsed for the track's file name.
+
+### Online VS (`port/platform/3ds/online_3ds.c`, `port/platform/net/room.c`, `port/host/game_restart.c`)
+
+- **Restart:** `mvc2_restart()` puts the game's memory back to power-on:
+  the EE data image is copied at the first boot and copied back, the EE
+  BSS, scratchpad and heap are zeroed (the heap keeps its address, aligned
+  to 64 KB), and each host module that answers the game's library calls
+  resets its own state (card files, ADXF handles, semaphores, the sound
+  client's queue, pads, frame count). The frontend drops its caches
+  (`fe_restart`: texture and palette records, character banks, clay meshes)
+  and the sound engine its banks and voices (`audio_restart`). Then
+  `mvc2_boot(1)` runs again.
+- **Determinism:** the game step is a function of memory and pads; the RTC
+  is fixed (`host_clock_fixed`), and the one sound status the game reads
+  for a decision that depends on the mixer's timing (whether a voice still
+  plays, `func_001E59E0`) answers "playing" (`audio_set_deterministic`).
+- **Rooms and lockstep** (`room.c`): the host's console keeps the room
+  (members, scores, King of the Hill's queue) and sends it to everyone; a
+  match is a session every member restarts for. UDP, one datagram per frame
+  on each link with every input the far end has not acknowledged (a lost
+  datagram is repaired by the next), so the host relays the players' inputs
+  to the watchers, and between two players who can't reach each other. A
+  fixed delay of 3 frames; GGPO-style time sync between the two players.
+  Tested on a desktop by `port/tools/room_test.c` (up to six simulated
+  consoles: latency, jitter, loss, blocked paths, people leaving).
+- **Lobby directory** (`port/server/lobby/worker.js`, `lobby_3ds.c`):
+  HTTPS on a background thread; rooms check in every 5 seconds and are
+  forgotten 45 seconds after the last. `node port/server/lobby/test.mjs`
+  tests it without a Cloudflare account.
+- **Fingerprints:** `mvc2_state_hash_frame` hashes 1/32 of the data image,
+  BSS and scratchpad plus 64 KB of the heap each frame (every byte every few
+  seconds), compared between the consoles.
 
 ### Bottom screen (`port/platform/3ds/movelist_3ds.c`)
 

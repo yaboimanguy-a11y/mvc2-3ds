@@ -17,6 +17,8 @@
  * Held while the app starts: L = no 3D meshes (diagnostics), R = start the
  * profiling build instead (the "MvC2 profiler" CIA, when installed).
  * 3D slider up: stereoscopic 3D (the stage behind the fighters; r_c3d.c).
+ * VS on the main menu: online VS against another 3DS (online_3ds.c): the
+ * lobby on the bottom screen, then a match in lockstep over Wi-Fi.
  * Every second the log gets the frame rate and where the frame time went
  * (r3ds_prof.h zones, and the game's own steps).
  *
@@ -36,6 +38,7 @@
 #include "movelist_3ds.h"
 #include "update_3ds.h"
 #include "settings_3ds.h"
+#include "online_3ds.h"
 #include <unistd.h>
 #include <sys/stat.h>
 #ifdef MVC2_PROF
@@ -120,6 +123,20 @@ static PadRaw read_pad(u32 held)
     if ((p.buttons & (PS2_UP | PS2_DOWN)) == (PS2_UP | PS2_DOWN)) p.buttons &= (uint16_t)~(PS2_UP | PS2_DOWN);
     if ((p.buttons & (PS2_LEFT | PS2_RIGHT)) == (PS2_LEFT | PS2_RIGHT)) p.buttons &= (uint16_t)~(PS2_LEFT | PS2_RIGHT);
     return p;
+}
+
+/* This program's id for online play: both consoles must run the same code
+ * (the version, when this file was built, and where the link put the end of
+ * the program, which moves with almost any change to any part of it). */
+extern char __end__[];
+static uint32_t build_id(void)
+{
+    char s[96];
+    uint32_t h = 2166136261u;
+    snprintf(s, sizeof s, "%s %s %s %lx %lx", update_version(), __DATE__, __TIME__, (unsigned long)(uintptr_t)__end__,
+             (unsigned long)(uintptr_t)&mvc2_frame);
+    for (const char *c = s; *c; c++) h = (h ^ (uint8_t)*c) * 16777619u;
+    return h;
 }
 
 #ifndef MVC2_PROF
@@ -252,6 +269,8 @@ int main(int argc, char **argv)
     movelist_settings(cfg.logging, cfg.unlock_all, unlock_active);
     movelist_status("", frame_skip, cfg.stretch);
     movelist_update();
+    online_init(dir, build_id(), cfg.unlock_all ? "mvc2_memcard_unlocked" : "mvc2_memcard", unlock_active);
+    printf("online: build %08X%s\n", (unsigned)build_id(), mvc2_can_restart() ? "" : " (off: no memory for the restart copy)");
 
     PadRaw idle;
     memset(&idle, 0, sizeof idle);
@@ -293,6 +312,11 @@ int main(int argc, char **argv)
             touchPosition tp;
             hidTouchRead(&tp);
             int act = movelist_touch(tp.px, tp.py);
+            if (act >= MOVELIST_ONLINE) {
+                online_touch(act);
+                act = 0;
+            } else if ((act == MOVELIST_UPDATE_CHECK || act == MOVELIST_UPDATE_INSTALL) && online_lobby_open())
+                act = 0; /* not during online play */
             if (act == MOVELIST_TOGGLE_ASPECT)
                 r3ds_set_present_mode(r3ds_present_mode() == R3DS_PRESENT_43 ? R3DS_PRESENT_STRETCH : R3DS_PRESENT_43);
             else if (act == MOVELIST_TOGGLE_SKIP)
@@ -332,7 +356,13 @@ int main(int argc, char **argv)
                 printf("update: %s\n", ul);
             }
         }
+        /* online play: the network, the lobby, a restart when a match starts */
+        online_refresh();
         PadRaw p0 = read_pad(held);
+        const uint16_t mine = p0.buttons;
+        const int online = online_drives_game();
+        /* VS on the main menu opens the online lobby; the lobby keeps the pad */
+        if (!online && (online_take_vs(p0.buttons) || online_blocks_pad())) p0 = idle;
         float slider = osGet3DSliderState(); /* 0: 2D (one eye) */
 
         /* pacing (above) */
@@ -359,16 +389,40 @@ int main(int argc, char **argv)
             next_tick += (u64)vb_ticks;
         }
 
+        if (online) {
+            /* a match (lockstep: only frames whose both pads are known) or
+             * the sync test / the boot into VS (many steps, the last drawn) */
+            steps = online_plan(steps, mine);
+            if (steps == 0) {
+                /* nothing new: the last picture stays; the bottom screen
+                 * when it changed; the next refresh */
+                if (movelist_dirty()) {
+                    C3D_FrameBegin(0);
+                    movelist_render();
+                    C3D_FrameEnd(0);
+                } else {
+                    gspWaitForVBlank();
+                }
+                next_tick = svcGetSystemTick();
+                continue;
+            }
+        }
         r3ds_frame_start();
         u64 l0 = RP_T();
         PROF_PHASE(PROF_PHASE_LOGIC);
         for (int st = 0; st < steps; st++) {
+            PadRaw p1 = idle;
+            if (online) online_pads(&p0, &p1);
             host_pad_set(0, &p0);
-            host_pad_set(1, &idle);
+            host_pad_set(1, &p1);
             r_set_discard(st < steps - 1);
             prof_step_t0 = RP_T();
             mvc2_frame();
             fe_audio_frame(); /* renders only without a device (keeps the music status moving) */
+            if (online && !online_after_step()) {
+                steps = st + 1; /* (its picture was not drawn: the last one stays) */
+                break;
+            }
         }
         r_set_discard(0);
         r3ds_present();
@@ -442,12 +496,17 @@ int main(int argc, char **argv)
             }
             /* the bottom screen's status row: redrawn only when its text
              * changes (a redraw costs CPU time and a whole-heap cache flush) */
-            char st[48];
+            char st[64];
             if (logging) /* with the log on: what limits the frame rate, CPU (game core) or GPU */
                 snprintf(st, sizeof st, "%.0f fps  cpu %.1f  gpu %.1f%s", nwin / secs + 0.3,
                          ms[RP_LOGIC] + ms[RP_SUBMIT] + ms[RP_MESHWAIT], gpu_ms_sum / nwin, eyes_sum > nwin ? " 3D" : "");
             else
                 snprintf(st, sizeof st, "%.0f fps%s", nwin / secs + 0.3, eyes_sum > nwin ? "  3D" : "");
+            {
+                char ol[32];
+                if (online_status(ol, sizeof ol))
+                    snprintf(st + strlen(st), sizeof st - strlen(st), "  %s", ol);
+            }
             if (strcmp(st, shown_status)) {
                 strcpy(shown_status, st);
                 movelist_status(st, frame_skip, r3ds_present_mode() == R3DS_PRESENT_STRETCH);
@@ -468,6 +527,7 @@ int main(int argc, char **argv)
         }
     }
     mvc2_step_hook = NULL;
+    online_shutdown();
     update_shutdown();
 #ifdef MVC2_PROF
     prof_fn_report(1);

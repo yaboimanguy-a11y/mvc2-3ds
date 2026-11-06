@@ -37,6 +37,11 @@ void sys3ds_print_read_stats(const char *what);
  * Prints the FPSCR before and after. */
 void sys3ds_fpu_ps2_mode(void);
 
+/* the network (SOC service), shared by the updater and online play: the
+ * first acquire starts it, the last release stops it; 0 = running */
+int sys3ds_soc_acquire(void);
+void sys3ds_soc_release(void);
+
 /* START pressed since the last scan (scans input) */
 int sys3ds_start_pressed(void);
 /* "Press START to exit." and wait for it */

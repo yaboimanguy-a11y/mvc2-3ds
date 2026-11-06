@@ -7,6 +7,7 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "host.h"
 
 extern int func_003F5270(void *, int, int);
@@ -65,8 +66,9 @@ int func_004148C0(void *av, void *bv, void *cv, float marker)
  * the web build reads zeros at wasm address 0x34.  Natively that is a
  * SIGSEGV: read the same zeros here. */
 extern void func_003A5930__game(void *, void *);
+static u8 fix_zero[0x40];
 void func_003A5930(void *a, void *b)
 {
-    static u8 zero[0x40];
-    func_003A5930__game(a, b ? b : zero);
+    func_003A5930__game(a, b ? b : fix_zero);
 }
+void host_game_fix_reset(void) { memset(fix_zero, 0, sizeof fix_zero); } /* game_restart.c */
