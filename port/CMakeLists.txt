@@ -366,7 +366,7 @@ if(MVC2_3DS)
   # repository whose releases it installs, and libcurl + mbedTLS from the
   # devkitPro portlibs (dkp-pacman -S 3ds-curl); without them the settings
   # screen's update button only says so
-  set(MVC2_VERSION "0.2.5" CACHE STRING "version of the 3DS app (compared with the release tags, v0.2.5)")
+  set(MVC2_VERSION "1.0" CACHE STRING "version of the 3DS app (compared with the release tags, v1.0)")
   set(MVC2_UPDATE_REPO "yaboimanguy-a11y/mvc2-3ds" CACHE STRING "GitHub owner/repo the updater reads releases from")
   set(_portlibs "${DEVKITPRO}/portlibs/3ds")
   set(MVC2_UPDATER_DEFS MVC2_VERSION="${MVC2_VERSION}" MVC2_UPDATE_REPO="${MVC2_UPDATE_REPO}")

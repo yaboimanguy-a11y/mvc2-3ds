@@ -177,6 +177,15 @@ static int cell_for(const FlCharBank *b, int ti, int row)
         if (C.cell[j].bank == b->id && C.cell[j].tile == ti && C.cell[j].row == row) { unlink_cell(j); break; }
     uint16_t lut[16];
     for (int k = 0; k < 16; k++) lut[k] = to5551(pal[k]);
+    /* index 0 is the sprites' see-through colour; the hit / intro flash
+     * palettes the game writes can mark it opaque, which drew every tile of
+     * the sprite as a solid (white) box */
+    if (lut[0] & 1) {
+        static unsigned n;
+        if (n++ % 300 == 0) printf("r3ds: sprite palette row %d made colour 0 opaque (%08lX); kept see-through (%u)\n",
+                                   row, (unsigned long)pal[0], n);
+    }
+    lut[0] = 0;
     C3D_Tex *pg = &C.page[i / CELLS_PER_PAGE];
     int ci = i % CELLS_PER_PAGE, cx = (ci % (PAGE / CELL)) * CELL, cy = (ci / (PAGE / CELL)) * CELL;
     uint16_t *dst = (uint16_t *)pg->data;
@@ -356,6 +365,11 @@ int fl_char_draw(FlCharBank *b, int f, const float m[16], uint32_t argb, int pal
     }
     int axis = m[1] == 0.f && m[4] == 0.f;
     float z = r_depth_of(m[14]);
+    /* sharp sampling: a sprite is many tiles in an atlas, each with a
+     * see-through border; smoothing blended every tile's edge with it (thin
+     * lines through and around the sprites) */
+    r_flush();
+    r_set_sprite_filter(0);
     float px = 0, py = 0;
     int drawn = 0;
     for (int k = 0; k < n; k++) {
@@ -392,6 +406,8 @@ int fl_char_draw(FlCharBank *b, int f, const float m[16], uint32_t argb, int pal
         o[3] = q[0]; o[4] = q[2]; o[5] = q[3];
         drawn++;
     }
+    r_flush();
+    r_set_sprite_filter(-1);
     RP_ADD(RP_CHAR, t0);
     return drawn;
 }

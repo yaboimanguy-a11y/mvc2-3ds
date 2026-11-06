@@ -1153,6 +1153,24 @@ static void put_exp(C3D_Tex *d, const TexRec *t, const uint32_t *pal)
     }
 }
 
+/* No new expansion could be made (every slot of this texture is still in
+ * flight, or no linear memory): the newest one this texture has, in older
+ * colours, rather than nothing (a mesh then drew plain white: the white /
+ * opaque boxes in hyper combos and round starts). */
+static unsigned exp_fails;
+static C3D_Tex *exp_fallback(TexRec *t, const char *why)
+{
+    Exp *best = NULL;
+    for (int k = 0; k < EXP_PER_TEX; k++)
+        if (t->exp[k].t && (!best || t->exp[k].last > best->last)) best = &t->exp[k];
+    if (exp_fails++ % 300 == 0)
+        printf("r3ds: no texture expansion (%s; %u so far, %uK in use)%s\n", why, exp_fails,
+               (unsigned)(R.exp_bytes >> 10), best ? ", older colours used" : ", not drawn");
+    if (!best) return NULL;
+    best->last = R.frame;
+    return best->t;
+}
+
 static C3D_Tex *expansion(TexRec *t, int row)
 {
     uint32_t pv;
@@ -1190,14 +1208,18 @@ static C3D_Tex *expansion(TexRec *t, int row)
             Exp *e = &t->exp[k];
             if (!in_flight(e->last) && (!slot || e->last < slot->last)) slot = e;
         }
-        if (!slot) return NULL; /* all rows of this texture in flight */
+        if (!slot) return exp_fallback(t, "all rows in flight"); /* all rows of this texture in flight */
         exp_drop(slot, 1);
     }
     uint64_t t0 = RP_T();
     GPU_TEXCOLOR fmt = exp_fmt(t, pal);
     exp_trim((size_t)t->pw * t->ph * (fmt == GPU_RGBA8 ? 4 : 2));
     C3D_Tex *n = tex_new(t->pw, t->ph, fmt);
-    if (!n) return NULL;
+    if (!n) {
+        exp_trim(EXP_BUDGET);   /* everything not in flight, then once more */
+        n = tex_new(t->pw, t->ph, fmt);
+    }
+    if (!n) return exp_fallback(t, "no linear memory");
     put_exp(n, t, pal);
     C3D_TexFlush(n);
     RP_ADD(RP_TEX, t0);
@@ -1969,7 +1991,7 @@ void r3ds_mesh_draw(const GlsDraw *d)
     if (textured) {
         int mode = Ui(UN_MODE), row = (int)U(UN_PALROW)[0];
         tex = resolve(d->tex[0], mode == RM_INDEX ? row : 0, &su, &sv);
-        if (!tex) tex = &R.white;
+        if (!tex) return; /* not plain white: a white box where the effect should be */
     }
 
     if (mesh_mode == R3DS_MESH_CPU || R.deferred) {

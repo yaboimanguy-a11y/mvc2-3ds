@@ -1,12 +1,13 @@
 # Marvel vs. Capcom 2 — PS2 decompilation and native port
 
-> ## 🎮 Nintendo 3DS port — v0.2.1 (New Nintendo 3DS only)
+> ## 🎮 Nintendo 3DS port — v1.0 (New Nintendo 3DS only)
 >
 > This fork adds a native **New Nintendo 3DS** port: the game's decompiled
-> code compiled for the 3DS, with no emulator. Fights run at or near
-> 60 fps, with sound, stereoscopic 3D, `.iso` / `.bin` + `.cue` disc
-> images, a move list and a settings menu on the bottom screen, an in-game
-> updater, and a CIA for the HOME Menu.
+> code compiled for the 3DS, with no emulator. Fights run at full speed,
+> 60 fps, with sound, stereoscopic 3D, **online VS** (public and private
+> rooms, 1v1 and King of the Hill, spectators, a leaderboard),
+> `.iso` / `.bin` + `.cue` disc images, a move list and a settings menu on
+> the bottom screen, an in-game updater, and a CIA for the HOME Menu.
 >
 > **⚠️ It only works on the New 3DS, New 3DS XL and New 2DS XL.** The
 > original 3DS / 2DS models are too slow.
@@ -14,16 +15,14 @@
 > **No game files are included.** You need your own dump of the PS2 disc
 > (NTSC-U `SLUS-20486`).
 >
-> - **Download:** [Releases](../../releases) → `mvc2-3ds-v0.2.1.zip`. Start the game from the Homebrew
+> - **Download:** [Releases](../../releases) → `mvc2-3ds-v1.0.zip`. Start the game from the Homebrew
 >   Launcher (`mvc2.3dsx`) **or** install `mvc2.cia` for a HOME Menu icon: one or the other, not both.
 >   Either way the zip's `/3ds/mvc2/` files and your disc image go on the SD card.
 > - **Setup, controls, building and how it works:** [port/docs/3DS.md](port/docs/3DS.md)
-> - **Experimental: v0.2.5** (pre-release, online VS): [Releases](../../releases) → `mvc2-3ds-v0.2.5.zip`.
->   The in-app updater stays on the stable release.
-> - **Online VS (in development):** VS on the main menu plays against
+> - **Online VS:** VS on the main menu plays against
 >   other New 3DS consoles over Wi-Fi: public and private rooms, 1v1 and
 >   King of the Hill, spectators
->   ([port/docs/3DS.md#online-vs-in-development](port/docs/3DS.md#online-vs-in-development);
+>   ([port/docs/3DS.md#online-vs](port/docs/3DS.md#online-vs);
 >   lobby server: [port/server/lobby](port/server/lobby/README.md))
 >
 > Upstream project: [g-guthrie/mvc2-ps2-decomp](https://github.com/g-guthrie/mvc2-ps2-decomp).

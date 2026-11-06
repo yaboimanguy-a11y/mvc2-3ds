@@ -1,4 +1,4 @@
-# Marvel vs. Capcom 2 on the Nintendo 3DS (v0.2.1)
+# Marvel vs. Capcom 2 on the Nintendo 3DS (v1.0)
 
 > **New Nintendo 3DS / New 3DS XL / New 2DS XL only.** The original 3DS,
 > 3DS XL and 2DS are too slow: the port needs the New models' 804 MHz CPU
@@ -18,7 +18,7 @@ controls, saves and disc access.
 - [Controls](#controls)
 - [The bottom screen](#the-bottom-screen)
 - [Troubleshooting](#troubleshooting)
-- [Known issues in v0.2.1](#known-issues-in-v021)
+- [Known issues in v1.0](#known-issues-in-v10)
 - [Building it yourself](#building-it-yourself)
 - [How the port works](#how-the-port-works)
 - [Credits and licenses](#credits-and-licenses)
@@ -45,7 +45,7 @@ controls, saves and disc access.
    `sdmc:/3ds/dspfirm.cdc`. If you already play other homebrew with sound,
    you already have it. Without it the game still runs, just silently.
 
-2. **Download the release.** Get `mvc2-3ds-v0.2.1.zip` (and `mvc2.cia` if you want a HOME Menu icon) from the
+2. **Download the release.** Get `mvc2-3ds-v1.0.zip` (and `mvc2.cia` if you want a HOME Menu icon) from the
    [Releases](../../../releases) page and unzip it. Inside is a folder `3ds/mvc2/`:
 
    ```
@@ -168,7 +168,7 @@ app's folder.
 The list comes from `movelist.txt` in the app folder, a plain text file
 you can edit. The format is described at the top of the file.
 
-## Online VS (in development)
+## Online VS
 
 **VS** on the main menu is online play against other New 3DS consoles,
 one player per console, over Wi-Fi. Choosing VS opens the **Online VS**
@@ -300,11 +300,15 @@ python3 port/tools/prof_symbolize.py build/port-3ds/mvc2_prof.elf mvc2_log.txt
 
 ---
 
-## Known issues in v0.2.1
+## Known issues in v1.0
 
-- **Speed.** Fights run at or near 60 fps; the busiest moments (several
-  hyper combos and assists at once) can still dip into the 50s. Frame skip
-  (on by default) keeps the game's speed right then by skipping drawing.
+- **Speed.** Fights run at full speed, 60 fps. The very busiest moments
+  (several hyper combos and assists at once) can still drop a few frames;
+  frame skip (on by default) keeps the game's speed then. On the 3DS the
+  sound effects are resampled with two-point interpolation (the PS2 used
+  four) to leave the CPU time for the game.
+- **Online VS** needs the same app version and game disc on every console;
+  a ping over about 60 ms makes the game slow down rather than skip.
 - **3D models are transformed on the CPU** (on the New 3DS's second core).
   The GPU's vertex-shader path for the stages hung the console in testing.
   Textured 3D models are drawn without fog.

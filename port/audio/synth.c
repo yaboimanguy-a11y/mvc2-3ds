@@ -291,6 +291,16 @@ void synth_render(Synth *s, float *out, int frames)
             long i0 = (long)floor(v->pos);
             double frac = v->pos - (double)i0;
             float x = 0;
+#ifdef __3DS__
+            /* the 3DS: two-point interpolation (the PS2's SPU2 used four);
+             * the windowed-sinc paths below cost the mixer more than the
+             * New 3DS's core could spare in a hyper combo's many voices */
+            (void)scale;
+            {
+                float s0 = smp(src, i0);
+                x = s0 + (float)frac * (smp(src, i0 + 1) - s0);
+            }
+#else
             if (scale == 1.0f) {
                 /* polyphase fast path, rows interpolated linearly */
                 double fp = frac * RS_PHASES;
@@ -309,6 +319,7 @@ void synth_render(Synth *s, float *out, int frames)
                 int n, first = rs_weights(frac, scale, w, &n);
                 for (int k = 0; k < n; k++) x += w[k] * smp(src, i0 + first + k);
             }
+#endif
             /* one-pole smoothing of gain changes (CC7 fades are per 1/60 s) */
             v->cl += (v->gl - v->cl) * (1.0f / 64);
             v->cr += (v->gr - v->cr) * (1.0f / 64);

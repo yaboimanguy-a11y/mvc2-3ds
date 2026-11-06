@@ -1016,11 +1016,11 @@ static void parse_list(const char *body)
             Listed r;
             memset(&r, 0, sizeof r);
             char state[12] = "";
-            /* room code name mode players max state */
+            /* room<TAB>code name mode players max state (6 fields) */
             const char *f = l + 5;
-            char fld[7][32];
+            char fld[6][32];
             int k = 0;
-            while (k < 7) {
+            while (k < 6) {
                 size_t n = strcspn(f, "\t\n");
                 snprintf(fld[k], sizeof fld[k], "%.*s", (int)(n < 31 ? n : 31), f);
                 k++;
@@ -1028,14 +1028,14 @@ static void parse_list(const char *body)
                 if (*f != '\t') break;
                 f++;
             }
-            if (k >= 7) {
+            if (k >= 6) {
                 snprintf(r.code, sizeof r.code, "%s", fld[0]);
                 snprintf(r.name, sizeof r.name, "%s", fld[1]);
                 snprintf(r.mode, sizeof r.mode, "%s", fld[2]);
                 r.players = atoi(fld[3]);
                 r.max = atoi(fld[4]);
                 snprintf(state, sizeof state, "%s", fld[5]);
-                r.playing = !strcmp(fld[6], "playing") || !strcmp(state, "playing");
+                r.playing = !strcmp(state, "playing");
                 O.listed[O.nlisted++] = r;
             }
         }
