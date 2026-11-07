@@ -4,6 +4,20 @@ keep the original semantics; hostify.transform() raises if `old` is missing
 (so a src/ change forces the override to be revisited).  Keep this list short.
 """
 OVERRIDES = {
+    # The Secret Factor shop sets an item's bit with `1 << id` for ids up to
+    # 0x3A, choosing the word by id >= 0x20.  MIPS sllv uses only the low 5
+    # bits of the count (1 << 0x2A sets bit 10); ARM32 shifts by the low 8
+    # bits, so 1 << 42 is 0 and every character, colour and extra with an
+    # id >= 0x20 (Storm, Ken, Magneto...) was paid for but never unlocked.
+    "src/fb23_f.c": [
+        ("ptr = (u32 *)(D_004C2840 + 0x30);\n                }\n                *ptr |= 1 << sh;",
+         "ptr = (u32 *)(D_004C2840 + 0x30);\n                }\n                *ptr |= 1 << (sh & 31); /* host R10: sllv */"),
+        ("ptr = (u32 *)(D_004C2840 + 0x38);\n                    }\n                    *ptr |= 1 << sh;",
+         "ptr = (u32 *)(D_004C2840 + 0x38);\n                    }\n                    *ptr |= 1 << (sh & 31); /* host R10: sllv */"),
+    ],
+    "src/batch5_30.c": [
+        ("u32 bit = 1 << a;", "u32 bit = 1 << (a & 31); /* host R10: sllv (shop extras >= 0x20) */"),
+    ],
     # func_0035D240 tail-jumps through D_004C1B60 with its own (a, b) still in
     # $a0/$a1; the C calls the entry with no arguments.  The entries read
     # both (func_0035D2A0: b[0x2B8], a[4]).  R22 forwards dispatch heads whose

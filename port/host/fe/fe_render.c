@@ -118,6 +118,97 @@ static void sync_pal(u32 pi)
     psync[pi].used = 1;
 }
 
+/* TIM2 images the game swizzles on load (record +0x20 != 0, through
+ * func_003EB210: PSMT4 by func_003EB260, PSMT8 by func_003EB5D0) sit in the
+ * pool rearranged for a PSMCT32 upload, in 128x128 (4-bit) or 128x64
+ * (8-bit) blocks; the GS reads them back as a plain image bw*128 texels
+ * wide.  Both swizzles only move texels, so the inverse is found by running
+ * the game's own function on inputs that number every texel (a digit at a
+ * time) and is kept for the few block shapes the game uses.  map[o] = the
+ * texel (in the bw*128-wide image) that pool texel o holds. */
+extern void func_003EB260(s32, s32, u8 *, u8 *);
+extern void func_003EB5D0(s32, s32, u8 *, u8 *);
+typedef struct { int type, bw, bh; u32 n; u32 *map; } Unswz;
+static Unswz unswz_cache[4];
+static int unswz_next;
+
+static const u32 *unswz_map(int type, int w, int h, u32 *n_out)
+{
+    int bw = (w - 1) / 128 + 1, bh = type ? (h - 1) / 64 + 1 : (h - 1) / 128 + 1;
+    u32 bytes = (u32)bw * (u32)bh * 0x2000u, n = type ? bytes : bytes * 2, i;
+    int k, digits, bits = type ? 8 : 4;
+    u8 *in, *out;
+    u32 *map;
+    Unswz *c;
+    for (k = 0; k < 4; k++) {
+        c = &unswz_cache[k];
+        if (c->map && c->type == type && c->bw == bw && c->bh == bh) {
+            *n_out = c->n;
+            return c->map;
+        }
+    }
+    in = (u8 *)malloc(bytes);
+    out = (u8 *)malloc(bytes);
+    map = (u32 *)calloc(n, sizeof *map);
+    if (!in || !out || !map) {
+        free(in); free(out); free(map);
+        return NULL;
+    }
+    for (digits = 0; (1u << (digits * bits)) < n; digits++)
+        ;
+    for (k = 0; k < digits; k++) {
+        int sh = k * bits;
+        if (type) {
+            for (i = 0; i < n; i++)
+                in[i] = (u8)(i >> sh);
+            memset(out, 0, bytes);
+            func_003EB5D0(w, h, in, out);
+            for (i = 0; i < n; i++)
+                map[i] |= (u32)out[i] << sh;
+        } else {
+            for (i = 0; i < bytes; i++)
+                in[i] = (u8)(((2 * i) >> sh & 15) | ((2 * i + 1) >> sh & 15) << 4);
+            memset(out, 0, bytes);
+            func_003EB260(w, h, in, out);
+            for (i = 0; i < n; i++)
+                map[i] |= (u32)(out[i >> 1] >> ((i & 1) * 4) & 15) << sh;
+        }
+    }
+    free(in);
+    free(out);
+    c = &unswz_cache[unswz_next];
+    unswz_next = (unswz_next + 1) & 3;
+    free(c->map);
+    c->type = type;
+    c->bw = bw;
+    c->bh = bh;
+    c->n = n;
+    c->map = map;
+    *n_out = n;
+    return map;
+}
+
+/* the w*h index image of a swizzled PSMT4/PSMT8 record, or NULL */
+static u8 *unswizzle(int psm, int w, int h, const u8 *src, u32 size)
+{
+    int type = psm == 0x14 ? 0 : 1, stride = ((w - 1) / 128 + 1) * 128;
+    u32 n, o;
+    const u32 *map = unswz_map(type, w, h, &n);
+    u8 *pix;
+    if (!map || (type ? n : n / 2) > size)
+        return NULL;
+    pix = (u8 *)calloc((size_t)w * h, 1);
+    if (!pix)
+        return NULL;
+    for (o = 0; o < n; o++) {
+        u32 s = map[o];
+        int x = (int)(s % (u32)stride), y = (int)(s / (u32)stride);
+        if (x < w && y < h)
+            pix[y * w + x] = type ? src[o] : (u8)(src[o >> 1] >> ((o & 1) * 4) & 15);
+    }
+    return pix;
+}
+
 static void sync_tex(u32 ti)
 {
     u8 *e, *src, *pix;
@@ -149,10 +240,16 @@ static void sync_tex(u32 ti)
         if (t->used && t->sig == sig)
             return;
     }
-    if (*(s32 *)(e + 0x20) != 0)
-        HOST_ONCE("texture %u: swizzled pool data (func_003EB210) is not converted", ti);
     n = w * h;
-    switch (psm) {
+    pix = NULL;
+    if (*(s32 *)(e + 0x20) != 0 && (psm == 0x14 || psm == 0x13)) {
+        pix = unswizzle(psm, w, h, src, size);
+        if (!pix)
+            HOST_ONCE("texture %u: swizzled %dx%d psm %#x not converted", ti, w, h, psm);
+    }
+    if (pix)
+        fmt = psm == 0x14 ? FL_TEX_IDX4 : FL_TEX_IDX8;
+    else switch (psm) {
     case 0x14: /* PSMT4 */
         fmt = FL_TEX_IDX4;
         pix = (u8 *)malloc((size_t)n);

@@ -1,4 +1,4 @@
-# Marvel vs. Capcom 2 on the Nintendo 3DS (v1.0)
+# Marvel vs. Capcom 2 on the Nintendo 3DS (v1.0.1)
 
 > **New Nintendo 3DS / New 3DS XL / New 2DS XL only.** The original 3DS,
 > 3DS XL and 2DS are too slow: the port needs the New models' 804 MHz CPU
@@ -18,7 +18,7 @@ controls, saves and disc access.
 - [Controls](#controls)
 - [The bottom screen](#the-bottom-screen)
 - [Troubleshooting](#troubleshooting)
-- [Known issues in v1.0](#known-issues-in-v10)
+- [Known issues in v1.0.1](#known-issues-in-v101)
 - [Building it yourself](#building-it-yourself)
 - [How the port works](#how-the-port-works)
 - [Credits and licenses](#credits-and-licenses)
@@ -45,7 +45,7 @@ controls, saves and disc access.
    `sdmc:/3ds/dspfirm.cdc`. If you already play other homebrew with sound,
    you already have it. Without it the game still runs, just silently.
 
-2. **Download the release.** Get `mvc2-3ds-v1.0.zip` (and `mvc2.cia` if you want a HOME Menu icon) from the
+2. **Download the release.** Get `mvc2-3ds-v1.0.1.zip` (and `mvc2.cia` if you want a HOME Menu icon) from the
    [Releases](../../../releases) page and unzip it. Inside is a folder `3ds/mvc2/`:
 
    ```
@@ -300,7 +300,7 @@ python3 port/tools/prof_symbolize.py build/port-3ds/mvc2_prof.elf mvc2_log.txt
 
 ---
 
-## Known issues in v1.0
+## Known issues in v1.0.1
 
 - **Speed.** Fights run at full speed, 60 fps. The very busiest moments
   (several hyper combos and assists at once) can still drop a few frames;
